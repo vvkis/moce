@@ -1,0 +1,12 @@
+.cache/
+.toolchain/
+.pnpm-store/
+dist/
+build/bin/
+cache/
+data/
+frontend/node_modules/
+frontend/dist/
+frontend/wailsjs/
+*.exe
+.DS_Store

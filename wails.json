@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "moce",
+  "outputfilename": "moce",
+  "frontend:install": "pnpm install --store-dir ../.pnpm-store",
+  "frontend:build": "pnpm run build",
+  "frontend:dev:watcher": "pnpm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "frontend/wailsjs",
+  "version": "2",
+  "author": {
+    "name": "墨册"
+  },
+  "info": {
+    "companyName": "墨册",
+    "productName": "墨册",
+    "productVersion": "1.0.0",
+    "copyright": "GNU GPLv3",
+    "comments": "本地把 TXT、EPUB、MOBI、AZW3 重新排成 EPUB"
+  }
+}

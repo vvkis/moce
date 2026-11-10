@@ -1,0 +1,5 @@
+Noto Serif SC subset
+Copyright 2017-2022 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Copyright 2015-2022 Google LLC.
+Licensed under the SIL Open Font License, Version 1.1.
+This file is a subset used only for headings in 墨册.

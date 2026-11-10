@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+@font-face {
+  font-family: "Moce Serif";
+  src: url("./assets/NotoSerifSC-subset.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+body {
+  margin: 0;
+  color: #241c17;
+  background: #e6d8c4;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "Droid Sans Fallback", sans-serif;
+}
+
+.paper-app {
+  background-color: #e7d7c2;
+  background-image:
+    radial-gradient(rgba(36, 28, 23, 0.045) 0.7px, transparent 0.7px),
+    radial-gradient(720px 280px at 12% -8%, rgba(157, 44, 44, 0.08), transparent 60%),
+    linear-gradient(180deg, #f7f0e4 0%, #e4d2ba 100%);
+  background-size: 4px 4px, auto, auto;
+}
+
+article,
+button,
+.shadow-card {
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.seal {
+  box-shadow: inset 0 0 0 1px rgba(251, 246, 238, 0.35);
+}
+
+.book-face {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 246, 0.45), transparent 28%),
+    #f6efe3;
+  box-shadow:
+    inset 0 0 0 1px rgba(122, 47, 36, 0.35),
+    inset 0 0 0 5px #f6efe3,
+    inset 0 0 0 6px rgba(157, 44, 44, 0.55);
+}
+
+textarea,
+input,
+select,
+button {
+  font: inherit;
+}
