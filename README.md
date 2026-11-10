@@ -21,7 +21,7 @@
   <a href="#许可证">许可证</a>
 </p>
 
-墨册是一个 Windows 桌面程序。书留在本机，不上传，也不调用 Calibre。当前版本 **v1.0.0**。
+墨册是一个 Windows 桌面程序。书留在本机，不上传，也不调用 Calibre。当前版本 **v1.0.1**。
 
 ## 它能做什么
 
@@ -39,7 +39,7 @@
 
 需要系统里已有的 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)。Windows 11 一般已经带了。程序不附带 WebView2 安装包。
 
-1. 从 [Releases](https://github.com/vvkis/moce/releases/latest) 下载 `墨册-portable.zip`（v1.0.0）。
+1. 从 [Releases](https://github.com/vvkis/moce/releases/latest) 下载 `墨册-portable.zip`（v1.0.1）。
 2. 解压整个「墨册」文件夹。不要只拿出里面的 exe。
 3. 双击 `墨册.exe`。
 
@@ -76,8 +76,17 @@
 <p>
   <img src="docs/screenshots/done.png" width="720" alt="排版完成">
 </p>
+<p>
+  <img src="docs/screenshots/toc-expanded.png" width="720" alt="目录全部展开">
+</p>
+<p>
+  <img src="docs/screenshots/toc-partial.png" width="720" alt="目录部分收起">
+</p>
+<p>
+  <img src="docs/screenshots/toc-collapsed.png" width="720" alt="目录全部收起">
+</p>
 
-界面里的《河灯》是程序自带的示例，不是已出版的书。刮搜截图用的是虚构结果，没有真实封面。
+《河灯》里「第一部」下面是「第一卷」，卷下面才是章。有下级的目录项前面有箭头，点一下展开或收起，子项逐层缩进。顶部可以全部展开或全部收起。没有下级的书仍是平铺列表。界面里的《河灯》是程序自带的示例，不是已出版的书。刮搜截图用的是虚构结果，没有真实封面。
 
 ## 给开发者
 

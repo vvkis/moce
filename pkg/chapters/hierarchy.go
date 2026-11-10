@@ -572,9 +572,81 @@ func groupFanwai(entries []hEntry) []hEntry {
 	return entries
 }
 
+// nestByRank turns a flat heading list into 部 > 卷 > 章 > 节.
+// Rank comes from the marker, not from how the title is worded after it.
+// 番外 sits with 卷, so the following 章 belong to it until the next 卷 or 部.
+// 后记 and the other root specials stay at the top and do not adopt later headings.
+func nestByRank(entries []hEntry) []hEntry {
+	type open struct {
+		rank  int
+		depth int
+	}
+	var stack []open
+	for i := range entries {
+		// 番外 is its own top-level parent. The following chapters belong to it
+		// until the next volume or part, matching the existing fanwai grouping.
+		if reFanwai.MatchString(titleKey(entries[i].title)) {
+			entries[i].depth = 1
+			stack = []open{{rank: 2, depth: 1}}
+			continue
+		}
+		rank, parentable := markerRank(entries[i].title)
+		if !parentable {
+			entries[i].depth = 1
+			stack = nil
+			continue
+		}
+		for len(stack) > 0 && stack[len(stack)-1].rank >= rank {
+			stack = stack[:len(stack)-1]
+		}
+		if len(stack) == 0 {
+			entries[i].depth = 1
+		} else {
+			entries[i].depth = stack[len(stack)-1].depth + 1
+		}
+		stack = append(stack, open{rank: rank, depth: entries[i].depth})
+	}
+	return entries
+}
+
+func markerRank(title string) (rank int, parentable bool) {
+	key := titleKey(title)
+	if key == "" || rootSpecial.MatchString(key) {
+		return 0, false
+	}
+	if reFanwai.MatchString(key) {
+		return 2, true
+	}
+	if strings.HasPrefix(key, "第") {
+		for _, item := range []struct {
+			marker string
+			rank   int
+		}{
+			{"篇", 1},
+			{"部", 1},
+			{"卷", 2},
+			{"节", 4},
+			{"章", 3},
+			{"回", 3},
+			{"集", 3},
+			{"幕", 3},
+		} {
+			number, _, ok := splitMarker(key, item.marker)
+			if ok && isNumberToken(number) {
+				return item.rank, true
+			}
+		}
+	}
+	return 3, true
+}
+
 func treeFrom(entries []hEntry, clean textclean.Options) []Node {
 	var roots []Node
-	parent := -1
+	type frame struct {
+		depth int
+		path  []int
+	}
+	var stack []frame
 	for _, e := range entries {
 		paras := textclean.Paragraphs(e.lines, clean)
 		title := e.title
@@ -584,13 +656,32 @@ func treeFrom(entries []hEntry, clean textclean.Options) []Node {
 			}
 			title = "前言"
 		}
-		node := Node{Title: title, Paragraphs: paras}
-		if e.depth >= 2 && parent >= 0 {
-			roots[parent].Children = append(roots[parent].Children, node)
-			continue
+		depth := e.depth
+		if depth < 1 {
+			depth = 1
 		}
-		roots = append(roots, node)
-		parent = len(roots) - 1
+		node := Node{Title: title, Paragraphs: paras}
+		for len(stack) > 0 && stack[len(stack)-1].depth >= depth {
+			stack = stack[:len(stack)-1]
+		}
+		var path []int
+		if len(stack) == 0 {
+			roots = append(roots, node)
+			path = []int{len(roots) - 1}
+		} else {
+			parent := nodeAt(&roots, stack[len(stack)-1].path)
+			parent.Children = append(parent.Children, node)
+			path = append(append([]int{}, stack[len(stack)-1].path...), len(parent.Children)-1)
+		}
+		stack = append(stack, frame{depth: depth, path: path})
 	}
 	return roots
+}
+
+func nodeAt(roots *[]Node, path []int) *Node {
+	n := &(*roots)[path[0]]
+	for _, i := range path[1:] {
+		n = &n.Children[i]
+	}
+	return n
 }

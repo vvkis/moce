@@ -14,7 +14,7 @@
   "info": {
     "companyName": "墨册",
     "productName": "墨册",
-    "productVersion": "1.0.0",
+    "productVersion": "1.0.1",
     "copyright": "GNU GPLv3",
     "comments": "本地把 TXT、EPUB、MOBI、AZW3 重新排成 EPUB"
   }

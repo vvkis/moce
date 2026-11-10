@@ -14,6 +14,7 @@ import {
   utf8ToBase64,
 } from "@/lib/utils"
 import { AlertCircle, Check, FilePlus2, FolderOpen, ImagePlus, RotateCcw, Search, Star, Trash2, Type } from "lucide-react"
+import { ChapterPreview } from "./ChapterPreview"
 import { ScrapeDialog } from "./ScrapeDialog"
 import { ShellContext } from "@/shell"
 
@@ -575,34 +576,20 @@ export function Txt2EpubPanel({ meta }: { meta: ToolMeta }) {
               />
             </div>
 
-            <div className="rounded-xl border border-line bg-paper-card p-4 shadow-card">
-              <h2 className="font-serif text-lg tracking-wide">章节预览</h2>
-              {!selectedJob?.probe ? (
+            {selectedJob?.probe ? (
+              <ChapterPreview
+                key={`${selectedJob.id}:${selectedJob.probe.entries.length}:${selectedJob.probe.entries[0]?.title ?? ""}:${selectedJob.probe.entries.at(-1)?.title ?? ""}`}
+                entries={selectedJob.probe.entries}
+                volumeCount={selectedJob.probe.volumeCount}
+                chapterCount={selectedJob.probe.chapterCount}
+                runeCount={selectedJob.probe.runeCount}
+              />
+            ) : (
+              <div className="rounded-xl border border-line bg-paper-card p-4 shadow-card">
+                <h2 className="font-serif text-lg tracking-wide">章节预览</h2>
                 <p className="mt-3 text-sm text-muted">添加文件后，这里列出识别到的章节。确认无误再转换。</p>
-              ) : (
-                <>
-                  <p className="mt-1 text-xs text-muted">
-                    {selectedJob.probe.volumeCount > 0 ? `${selectedJob.probe.volumeCount} 卷 · ` : ""}
-                    {selectedJob.probe.chapterCount} 章 · {selectedJob.probe.runeCount.toLocaleString("zh-CN")} 字
-                  </p>
-                  <ol className="mt-3 max-h-80 space-y-1 overflow-auto pr-1">
-                    {selectedJob.probe.entries.slice(0, 800).map((entry, index) => (
-                      <li
-                        key={`${entry.title}-${index}`}
-                        className="rounded px-2 py-1 hover:bg-paper"
-                        style={{ paddingLeft: 8 + Math.max(0, entry.level - 1) * 16 }}
-                      >
-                        <div className={entry.kind === "volume" ? "font-serif text-sm" : "text-sm"}>{entry.title}</div>
-                        {entry.snippet ? <div className="truncate text-xs text-muted">{entry.snippet}</div> : null}
-                      </li>
-                    ))}
-                  </ol>
-                  {selectedJob.probe.entries.length > 800 ? (
-                    <p className="mt-2 text-xs text-muted">只显示前 800 条，转换时会包含全部。</p>
-                  ) : null}
-                </>
-              )}
-            </div>
+              </div>
+            )}
           </section>
         </div>
       </div>

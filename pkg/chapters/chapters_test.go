@@ -1,6 +1,8 @@
 package chapters
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -503,5 +505,102 @@ func TestPrintedTocPageFolds(t *testing.T) {
 	body := strings.Join(res.Nodes[0].Paragraphs, "")
 	if !strings.Contains(body, "第二章") || !strings.Contains(body, "第四章") {
 		t.Fatalf("listing dropped: %#v", res.Nodes[0].Paragraphs)
+	}
+}
+
+func TestPartVolumeChapterNests(t *testing.T) {
+	text := strings.Join([]string{
+		"第一部 河上",
+		"　　部里只有一句。",
+		"第一卷 上游",
+		"第一章 纸灯",
+		"　　他把灯放进河里。",
+		"还有一行。",
+		"第一节 入水",
+		"　　灯芯还亮着。",
+		"还有一行。",
+		"番外 灯芯",
+		"第一章 余温",
+		"　　灯芯收进铁盒。",
+		"还有一行。",
+	}, "\n")
+	res, err := Split(text, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(titles(res.Nodes), "\n")
+	want := strings.Join([]string{
+		"第一部 河上",
+		"  第一卷 上游",
+		"    第一章 纸灯",
+		"      第一节 入水",
+		"番外 灯芯",
+		"  第一章 余温",
+	}, "\n")
+	if got != want {
+		t.Fatalf("got:\n%s", got)
+	}
+}
+
+func TestSourceTocDepthIsKept(t *testing.T) {
+	// Nesting comes from the source TOC depth, not from the words 卷 or 章.
+	text := strings.Join([]string{
+		"第一卷 只是标题",
+		"　　卷里的话。",
+		"不是卷",
+		"　　中间一层。",
+		"第一章 纸灯",
+		"　　他把灯放进河里。",
+	}, "\n")
+	opt := opts()
+	opt.Headings = []Heading{
+		{Title: "第一卷 只是标题", Depth: 1},
+		{Title: "不是卷", Depth: 2},
+		{Title: "第一章 纸灯", Depth: 3},
+	}
+	res, err := Split(text, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(titles(res.Nodes), "\n")
+	want := "第一卷 只是标题\n  不是卷\n    第一章 纸灯"
+	if got != want {
+		t.Fatalf("got:\n%s", got)
+	}
+	if res.Entries[0].Level != 1 || res.Entries[1].Level != 2 || res.Entries[2].Level != 3 {
+		t.Fatalf("levels %+v", res.Entries)
+	}
+}
+
+func TestSampleNovelNests(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "samples", "示例小说.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Split(string(raw), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(titles(res.Nodes), "\n")
+	want := strings.Join([]string{
+		"前言",
+		"楔子",
+		"第一部 河上",
+		"  第一卷 上游",
+		"    第一章 纸灯",
+		"      第一节 入水",
+		"    第二章 旧码头",
+		"  第二卷 下游",
+		"    第三章 回信",
+		"第二部 岸上",
+		"  第一卷 芦花",
+		"    第四章 岸边",
+		"番外 灯芯",
+		"  第一章 余温",
+		"  第二章 未寄出",
+		"后记",
+	}, "\n")
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }

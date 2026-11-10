@@ -78,7 +78,9 @@ var (
 	reDatePrefix        = regexp.MustCompile(`^[（(]?[0-9０-９]{1,4}[.．\-/／][0-9０-９]{1,2}(?:[.．\-/／][0-9０-９]{1,2})?[）)]?\s*`)
 )
 
-// Split detects headings and builds a two-level TOC.
+// Split detects headings and builds a TOC tree.
+// Plain text keeps one parent level: a volume owns the following chapters.
+// A nested source TOC (EPUB nav or NCX) keeps the depth it already has.
 // When nothing matches, the text is cut into sized parts.
 func Split(text string, opt Options) (Result, error) {
 	text = strings.TrimPrefix(text, "\uFEFF")
@@ -177,9 +179,16 @@ func Split(text string, opt Options) (Result, error) {
 			entries[i] = hEntry{title: s.title, lines: s.lines, toc: true}
 		}
 		entries = dropTocEchoes(entries)
+		// A source TOC that already has depth is kept. Plain text gets one more
+		// pass so 部 contains 卷 and 卷 contains 章, using the same rank order
+		// the heading scan already knows.
+		preserved := preserve(entries, opt.Headings) != nil
 		entries = organize(entries, opt.Headings)
 		entries = mergeHidden(entries)
 		entries = groupFanwai(entries)
+		if !preserved {
+			entries = nestByRank(entries)
+		}
 		clean := textclean.Options{MergeBrokenLines: opt.MergeBrokenLines, DropEmptyLines: opt.DropEmptyLines}
 		roots := collapseLonelyVolumes(treeFrom(entries, clean))
 		if len(roots) == 0 {
