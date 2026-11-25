@@ -3,10 +3,14 @@ package azw3
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
+	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"sort"
@@ -56,12 +60,13 @@ func fcisRecord(textLen uint32) []byte {
 }
 
 type pageDoc struct {
-	title    string
-	bodyAttr string
-	skeleton []byte
-	chunks   [][]byte
-	bodyAid  string
-	bodyOff  int // byte offset right after <body ...> inside skeleton
+	title     string
+	bodyAttr  string
+	skeleton  []byte
+	chunks    [][]byte
+	bodyAid   string
+	bodyStart int // byte offset of "<body" inside skeleton
+	bodyOff   int // byte offset right after "<body ...>" inside skeleton
 }
 
 type tocItem struct {
@@ -90,18 +95,23 @@ func Write(book epub.Book) ([]byte, error) {
 		book.Modified = book.Modified.UTC()
 	}
 
-	// Prepare resources (JPEG cover image + optional embedded font).
-	// Kindle's native KF8 renderer & home-screen thumbnailer expect JPEG for covers.
+	// Prepare resources: Kindle-compliant JFIF JPEG cover + dedicated <=300px JPEG thumbnail + optional font.
+	// Amazon's native MOBI/KF8 renderer rejects JPEGs without JFIF metadata and drops covers with EXIF segments.
 	var resources [][]byte
 	coverResIdx := -1 // 0-based index into resources
+	thumbResIdx := -1 // 0-based index into resources
 	coverRef := ""
-	coverMIME := ""
 	if len(book.Cover) > 0 && isRasterImage(book.Cover, book.CoverMIME) {
-		covBytes, covMIME := ensureJPEG(book.Cover, book.CoverMIME)
+		covBytes, thumbBytes, covMIME := prepareKindleCoverAndThumb(book.Cover, book.CoverMIME)
 		coverResIdx = len(resources)
 		resources = append(resources, covBytes)
-		coverMIME = covMIME
-		coverRef = fmt.Sprintf("kindle:embed:%s?mime=%s", toBase32(coverResIdx+1, 4), coverMIME)
+		coverRef = fmt.Sprintf("kindle:embed:%s?mime=%s", toBase32(coverResIdx+1, 4), covMIME)
+		if len(thumbBytes) > 0 {
+			thumbResIdx = len(resources)
+			resources = append(resources, thumbBytes)
+		} else {
+			thumbResIdx = coverResIdx
+		}
 	}
 
 	fontRef := ""
@@ -120,7 +130,7 @@ func Write(book epub.Book) ([]byte, error) {
 	var pages []pageDoc
 	aidSeq := 1
 	nextAid := func() string {
-		s := toBase32(aidSeq, 4)
+		s := toBase32(aidSeq, 1)
 		aidSeq++
 		return s
 	}
@@ -129,11 +139,11 @@ func Write(book epub.Book) ([]byte, error) {
 	coverPageIdx := 0
 	var coverInner string
 	if coverRef != "" {
-		coverInner = fmt.Sprintf(`<p class="cover-img"><img src="%s" alt="%s"/></p>`, xmlEscape(coverRef), xmlEscape(book.Title))
+		coverInner = fmt.Sprintf(`<p class="cover-img" aid="%s"><img src="%s" alt="%s"/></p>`, nextAid(), xmlEscape(coverRef), xmlEscape(book.Title))
 	} else {
 		coverInner = fmt.Sprintf(
-			`<div class="cover-frame"><p class="cover-mark">墨册</p><h1 class="cover-title">%s</h1><p class="cover-author">%s</p></div>`,
-			xmlEscape(book.Title), xmlEscape(book.Author),
+			`<div class="cover-frame" aid="%s"><p class="cover-mark" aid="%s">墨册</p><h1 class="cover-title" aid="%s">%s</h1><p class="cover-author" aid="%s">%s</p></div>`,
+			nextAid(), nextAid(), nextAid(), xmlEscape(book.Title), nextAid(), xmlEscape(book.Author),
 		)
 	}
 	pages = append(pages, makePage(book.Title, `class="coverpage"`, []string{coverInner}, nextAid()))
@@ -161,12 +171,12 @@ func Write(book epub.Book) ([]byte, error) {
 	// Compute chunk counts per page before generating inline TOC links if needed.
 	// Inline TOC sits before chapters, so its own chunk count shifts chapter FIDs.
 	if inlineTOCIdx >= 0 {
-		// First pass: estimate FIDs assuming inline TOC has 1 chunk; if inline TOC
-		// splits into K chunks, regenerate links with exact K offset.
+		tocAidStart := aidSeq
 		tocChunkCount := 1
 		for pass := 0; pass < 2; pass++ {
+			aidSeq = tocAidStart
 			pageFID := computePageFIDs(pages, inlineTOCIdx, tocChunkCount)
-			tocChunks := renderInlineTOC(tocTree, !book.HideCoverInTOC, coverPageIdx, pageFID)
+			tocChunks := renderInlineTOC(tocTree, !book.HideCoverInTOC, coverPageIdx, pageFID, nextAid)
 			if len(tocChunks) == tocChunkCount {
 				pages[inlineTOCIdx] = makePage("目录", "", tocChunks, nextAid())
 				break
@@ -180,14 +190,14 @@ func Write(book epub.Book) ([]byte, error) {
 	var flow0 bytes.Buffer
 	skels := make([]skelEntry, 0, len(pages))
 	chunks := make([]chunkEntry, 0, len(pages))
-	pageInsertOffset := make([]int, len(pages))
+	pageBodyOffset := make([]int, len(pages))
 	pageTotalLen := make([]int, len(pages))
 	pageFirstFID := make([]int, len(pages))
 
 	globalFID := 0
 	for i, pg := range pages {
 		startPos := flow0.Len()
-		pageInsertOffset[i] = startPos + pg.bodyOff
+		pageBodyOffset[i] = startPos + pg.bodyStart
 		pageFirstFID[i] = globalFID
 
 		flow0.Write(pg.skeleton)
@@ -227,19 +237,36 @@ func Write(book epub.Book) ([]byte, error) {
 		{uint32(len(flow0Bytes)), uint32(len(combined))},
 	})
 
-	// Split and PalmDOC-compress text records, appending 1 trailing 0x00 multibyte-overlap
-	// marker byte (extra_data_flags = 1) to match standard Calibre / KindleGen KF8 files.
+	// Split into strict 4096-byte text records with UTF-8 multibyte overlap (extra_data_flags bit 0).
 	rawTextChunks := splitTextRecords(combined)
 	records := make([][]byte, 0, len(rawTextChunks)+32)
 	records = append(records, nil) // placeholder for Record 0
-	textBytesTotal := 0
-	for _, chunk := range rawTextChunks {
-		comp := compressPalmDOC(chunk)
-		comp = append(comp, 0x00) // extra_data_flags bit 0: 0 trailing multibyte overlap bytes
+	uncompressedLengths := make([]int, len(rawTextChunks))
+	for i, chunk := range rawTextChunks {
+		uncompressedLengths[i] = len(chunk.data)
+		comp := compressPalmDOC(chunk.data)
+		if len(chunk.overlap) > 0 {
+			comp = append(comp, chunk.overlap...)
+		}
+		comp = append(comp, byte(len(chunk.overlap)))
 		records = append(records, comp)
-		textBytesTotal += len(comp)
 	}
 	lastTextRec := len(rawTextChunks)
+
+	// Build NCX entries and apply TBS (Trailing Byte Sequences, extra_data_flags bit 1)
+	// directly onto text records 1..lastTextRec, matching Calibre / KindleGen KF8 output.
+	ncxEntries := flattenNCX(tocTree, !book.HideCoverInTOC, coverPageIdx, pageBodyOffset, pageTotalLen, pageFirstFID, len(flow0Bytes))
+	hasTBS := applyTrailingByteSequences(ncxEntries, records, uncompressedLengths)
+	extraDataFlags := uint32(1)
+	if hasTBS {
+		extraDataFlags |= 2
+	}
+
+	// Pad after the last text record so the first INDX record aligns cleanly to 4 bytes.
+	textBytesTotal := 0
+	for i := 1; i <= lastTextRec; i++ {
+		textBytesTotal += len(records[i])
+	}
 	firstNonTextRec := lastTextRec + 1
 	if rem := textBytesTotal % 4; rem != 0 {
 		records = append(records, make([]byte, 4-rem))
@@ -258,8 +285,6 @@ func Write(book epub.Book) ([]byte, error) {
 	}
 	sort.Slice(guides, func(i, j int) bool { return guides[i].typ < guides[j].typ })
 	guideRecs := buildGuideIndex(guides)
-
-	ncxEntries := flattenNCX(tocTree, !book.HideCoverInTOC, coverPageIdx, pageInsertOffset, pageTotalLen, pageFirstFID, len(flow0Bytes))
 	ncxRecs := buildNCXIndex(ncxEntries)
 
 	chunkIdx := uint32(len(records))
@@ -278,7 +303,7 @@ func Write(book epub.Book) ([]byte, error) {
 		records = append(records, ncxRecs...)
 	}
 
-	// Append resources (cover + font).
+	// Append resources (cover + thumbnail + optional font).
 	firstResIdx := uint32(nullIndex)
 	if len(resources) > 0 {
 		firstResIdx = uint32(len(records))
@@ -298,7 +323,7 @@ func Write(book epub.Book) ([]byte, error) {
 	records = append(records, []byte{0xE9, 0x8E, '\r', '\n'}) // EOF
 
 	// Build EXTH and Record 0.
-	exth := buildEXTH(book, coverResIdx, len(resources), pageInsertOffset[firstTextPageIdx])
+	exth := buildEXTH(book, coverResIdx, thumbResIdx, len(resources), pageBodyOffset[firstTextPageIdx])
 	records[0] = buildRecord0(record0Params{
 		textLen:         uint32(len(combined)),
 		lastTextRec:     uint16(lastTextRec),
@@ -314,6 +339,7 @@ func Write(book epub.Book) ([]byte, error) {
 		guideIdx:        guideIdx,
 		langCode:        mobiLangCode(book.Language),
 		hasFonts:        hasFonts,
+		extraDataFlags:  extraDataFlags,
 		exth:            exth,
 		fullTitle:       []byte(book.Title),
 		uid:             randomUID(),
@@ -327,7 +353,9 @@ func makePage(title, bodyAttr string, rawChunks []string, bodyAid string) pageDo
 	skel.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	skel.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml"><head><title>`)
 	skel.WriteString(xmlEscape(title))
-	skel.WriteString(`</title><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><link rel="stylesheet" type="text/css" href="kindle:flow:0001?mime=text/css"/></head><body`)
+	skel.WriteString(`</title><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><link rel="stylesheet" type="text/css" href="kindle:flow:0001?mime=text/css"/></head>`)
+	bodyStart := skel.Len()
+	skel.WriteString(`<body`)
 	if bodyAttr != "" {
 		skel.WriteByte(' ')
 		skel.WriteString(bodyAttr)
@@ -346,12 +374,13 @@ func makePage(title, bodyAttr string, rawChunks []string, bodyAid string) pageDo
 		chunkBytes = append(chunkBytes, []byte{})
 	}
 	return pageDoc{
-		title:    title,
-		bodyAttr: bodyAttr,
-		skeleton: skel.Bytes(),
-		chunks:   chunkBytes,
-		bodyAid:  bodyAid,
-		bodyOff:  bodyOff,
+		title:     title,
+		bodyAttr:  bodyAttr,
+		skeleton:  skel.Bytes(),
+		chunks:    chunkBytes,
+		bodyAid:   bodyAid,
+		bodyStart: bodyStart,
+		bodyOff:   bodyOff,
 	}
 }
 
@@ -392,16 +421,14 @@ func buildChapterPages(chs []epub.Chapter, volStyle string, pages *[]pageDoc, ne
 			var chunks []string
 			if emptyParent && volStyle == "divider" {
 				var b strings.Builder
-				b.WriteString(`<div class="vol-divider"><h1>`)
-				b.WriteString(xmlEscape(title))
-				b.WriteString(`</h1>`)
+				fmt.Fprintf(&b, `<div class="vol-divider" aid="%s"><h1 aid="%s">%s</h1>`, nextAid(), nextAid(), xmlEscape(title))
 				if cnt := countLeafChapters(c.Children); cnt > 0 {
-					fmt.Fprintf(&b, `<p class="vol-count">共 %d 章</p>`, cnt)
+					fmt.Fprintf(&b, `<p class="vol-count" aid="%s">共 %d 章</p>`, nextAid(), cnt)
 				}
 				b.WriteString(`</div>`)
 				chunks = []string{b.String()}
 			} else {
-				chunks = splitChapterChunks(title, c.Paragraphs)
+				chunks = splitChapterChunks(title, c.Paragraphs, nextAid)
 			}
 			*pages = append(*pages, makePage(title, "", chunks, nextAid()))
 			children := walk(c.Children)
@@ -416,15 +443,15 @@ func buildChapterPages(chs []epub.Chapter, volStyle string, pages *[]pageDoc, ne
 	return walk(chs), nil
 }
 
-func splitChapterChunks(title string, paragraphs []string) []string {
+func splitChapterChunks(title string, paragraphs []string, nextAid func() string) []string {
 	var chunks []string
 	var cur strings.Builder
-	fmt.Fprintf(&cur, "<h1>%s</h1>", xmlEscape(title))
+	fmt.Fprintf(&cur, `<h1 aid="%s">%s</h1>`, nextAid(), xmlEscape(title))
 	for _, p := range paragraphs {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		frag := "\n<p>" + xmlEscape(p) + "</p>"
+		frag := fmt.Sprintf("\n<p aid=\"%s\">%s</p>", nextAid(), xmlEscape(p))
 		if cur.Len() > 0 && cur.Len()+len(frag) > chunkTarget {
 			chunks = append(chunks, cur.String())
 			cur.Reset()
@@ -451,12 +478,12 @@ func computePageFIDs(pages []pageDoc, placeholderIdx, placeholderChunks int) []i
 	return fids
 }
 
-func renderInlineTOC(tree []tocItem, includeCover bool, coverPageIdx int, pageFID []int) []string {
+func renderInlineTOC(tree []tocItem, includeCover bool, coverPageIdx int, pageFID []int, nextAid func() string) []string {
 	var lines []string
-	lines = append(lines, `<h1>目录</h1>`)
+	lines = append(lines, fmt.Sprintf(`<h1 aid="%s">目录</h1>`, nextAid()))
 	if includeCover {
-		lines = append(lines, fmt.Sprintf(`<p class="toc-item toc-l1"><a href="kindle:pos:fid:%s:off:%s">封面</a></p>`,
-			toBase32(pageFID[coverPageIdx], 4), toBase32(0, 10)))
+		lines = append(lines, fmt.Sprintf(`<p class="toc-item toc-l1" aid="%s"><a href="kindle:pos:fid:%s:off:%s" aid="%s">封面</a></p>`,
+			nextAid(), toBase32(pageFID[coverPageIdx], 4), toBase32(0, 10), nextAid()))
 	}
 	var walk func([]tocItem, int)
 	walk = func(items []tocItem, depth int) {
@@ -466,7 +493,7 @@ func renderInlineTOC(tree []tocItem, includeCover bool, coverPageIdx int, pageFI
 		}
 		for _, it := range items {
 			href := fmt.Sprintf("kindle:pos:fid:%s:off:%s", toBase32(pageFID[it.pageIdx], 4), toBase32(0, 10))
-			lines = append(lines, fmt.Sprintf(`<p class="toc-item toc-l%d"><a href="%s">%s</a></p>`, cls, href, xmlEscape(it.title)))
+			lines = append(lines, fmt.Sprintf(`<p class="toc-item toc-l%d" aid="%s"><a href="%s" aid="%s">%s</a></p>`, cls, nextAid(), href, nextAid(), xmlEscape(it.title)))
 			walk(it.children, depth+1)
 		}
 	}
@@ -493,7 +520,7 @@ func renderInlineTOC(tree []tocItem, includeCover bool, coverPageIdx int, pageFI
 // flattenNCX builds the KF8 NCX index in breadth-first (level-order) sequence so
 // every parent's direct children occupy a contiguous [first_child, last_child] slice,
 // matching Calibre & KindleGen's KF8 NCX layout.
-func flattenNCX(tree []tocItem, includeCover bool, coverPageIdx int, pageInsertOff, pageLen, pageFID []int, totalFlow0 int) []ncxEntry {
+func flattenNCX(tree []tocItem, includeCover bool, coverPageIdx int, pageBodyOff, pageLen, pageFID []int, totalFlow0 int) []ncxEntry {
 	roots := make([]tocItem, 0, len(tree)+1)
 	if includeCover {
 		roots = append(roots, tocItem{title: "封面", pageIdx: coverPageIdx})
@@ -507,45 +534,20 @@ func flattenNCX(tree []tocItem, includeCover bool, coverPageIdx int, pageInsertO
 		item      tocItem
 		depth     int
 		parentIdx int
-		endOffset int
-	}
-
-	// Precompute each node's end offset in reading order (next sibling or parent's end).
-	var attachEnd func([]tocItem, int) []int
-	attachEnd = func(list []tocItem, parentEnd int) []int {
-		ends := make([]int, len(list))
-		for i := range list {
-			nextEnd := parentEnd
-			for j := i + 1; j < len(list); j++ {
-				if off := pageInsertOff[list[j].pageIdx]; off > pageInsertOff[list[i].pageIdx] {
-					nextEnd = off
-					break
-				}
-			}
-			ends[i] = nextEnd
-		}
-		return ends
 	}
 
 	var queue []queueItem
-	rootEnds := attachEnd(roots, totalFlow0)
-	for i, it := range roots {
-		queue = append(queue, queueItem{item: it, depth: 0, parentIdx: -1, endOffset: rootEnds[i]})
+	for _, it := range roots {
+		queue = append(queue, queueItem{item: it, depth: 0, parentIdx: -1})
 	}
 
 	flat := make([]ncxEntry, 0, len(roots))
 	for head := 0; head < len(queue); head++ {
 		q := queue[head]
 		idx := len(flat)
-		off := pageInsertOff[q.item.pageIdx]
-		length := q.endOffset - off
-		if length <= 0 {
-			length = pageLen[q.item.pageIdx]
-		}
 		entry := ncxEntry{
 			index:     idx,
-			offset:    off,
-			length:    length,
+			offset:    pageBodyOff[q.item.pageIdx],
 			label:     q.item.title,
 			depth:     q.depth,
 			hasParent: q.parentIdx >= 0,
@@ -561,12 +563,25 @@ func flattenNCX(tree []tocItem, includeCover bool, coverPageIdx int, pageInsertO
 			}
 			p.lastChild = idx
 		}
-		if len(q.item.children) > 0 {
-			cEnds := attachEnd(q.item.children, q.endOffset)
-			for i, ch := range q.item.children {
-				queue = append(queue, queueItem{item: ch, depth: q.depth + 1, parentIdx: idx, endOffset: cEnds[i]})
+		for _, ch := range q.item.children {
+			queue = append(queue, queueItem{item: ch, depth: q.depth + 1, parentIdx: idx})
+		}
+	}
+
+	// Match Calibre's get_next_start: smallest strictly greater offset at depth <= entry.depth,
+	// or totalFlow0 if none exists.
+	for i := range flat {
+		endOff := totalFlow0
+		for j := range flat {
+			if flat[j].depth <= flat[i].depth && flat[j].offset > flat[i].offset && flat[j].offset < endOff {
+				endOff = flat[j].offset
 			}
 		}
+		length := endOff - flat[i].offset
+		if length <= 0 {
+			length = 1
+		}
+		flat[i].length = length
 	}
 	return flat
 }
@@ -635,7 +650,7 @@ func buildFDST(flows [][2]uint32) []byte {
 	return buf.Bytes()
 }
 
-func buildEXTH(book epub.Book, coverResIdx, numResources, startOffset int) []byte {
+func buildEXTH(book epub.Book, coverResIdx, thumbResIdx, numResources, startOffset int) []byte {
 	var body bytes.Buffer
 	count := 0
 	putBytes := func(code uint32, val []byte) {
@@ -675,22 +690,38 @@ func buildEXTH(book epub.Book, coverResIdx, numResources, startOffset int) []byt
 	for _, subj := range book.Subjects {
 		putStr(105, subj)
 	}
-	putStr(106, book.Published)
+	pubDate := strings.TrimSpace(book.Published)
+	if pubDate == "" {
+		pubDate = book.Modified.Format(time.RFC3339)
+	}
+	putStr(106, pubDate)
+	putStr(108, "moce")
+	putStr(112, "moce:"+book.UUID)
 	putStr(113, book.UUID) // ASIN / UUID
 	putU32(116, uint32(startOffset))
 	putU32(125, uint32(numResources))
-	if coverResIdx >= 0 {
-		putStr(129, fmt.Sprintf("kindle:embed:%s", toBase32(coverResIdx+1, 4)))
+	if thumbResIdx >= 0 {
+		// Calibre / KindleGen encodes thumbnail_offset (0-based) into EXTH 129.
+		// When cover=0 and thumbnail=1, toBase32(1, 4) == "0001".
+		uriIdx := thumbResIdx
+		if uriIdx == 0 {
+			uriIdx = 1
+		}
+		putStr(129, fmt.Sprintf("kindle:embed:%s", toBase32(uriIdx, 4)))
 	}
 	if numResources > 0 {
 		putU32(131, 0)
 	}
 	if coverResIdx >= 0 {
 		putU32(201, uint32(coverResIdx))
-		putU32(202, uint32(coverResIdx))
+		if thumbResIdx >= 0 {
+			putU32(202, uint32(thumbResIdx))
+		} else {
+			putU32(202, uint32(coverResIdx))
+		}
 		putU32(203, 0)
 	}
-	// KindleGen2 / Calibre KF8 compatibility creator markers
+	// KindleGen 2.9 / Calibre KF8 compatibility creator markers
 	putU32(204, 200)
 	putU32(205, 2)
 	putU32(206, 9)
@@ -699,19 +730,20 @@ func buildEXTH(book epub.Book, coverResIdx, numResources, startOffset int) []byt
 	putStr(503, book.Title)
 	putStr(524, book.Language)
 	putStr(528, "true")
+	putStr(535, "0730-890adc2")
 
-	rawLen := 12 + body.Len()
-	pad := (4 - (rawLen % 4)) % 4
+	// Match Calibre writer8/exth.py: EXTH header length excludes trailing alignment pad,
+	// and 1..4 zero padding bytes are always appended after the EXTH records before full_title.
+	exthDataLen := body.Len()
+	pad := 4 - (exthDataLen % 4)
 	var out bytes.Buffer
 	out.WriteString("EXTH")
 	var h [8]byte
-	binary.BigEndian.PutUint32(h[0:4], uint32(rawLen+pad))
+	binary.BigEndian.PutUint32(h[0:4], uint32(exthDataLen+12))
 	binary.BigEndian.PutUint32(h[4:8], uint32(count))
 	out.Write(h[:])
 	out.Write(body.Bytes())
-	if pad > 0 {
-		out.Write(make([]byte, pad))
-	}
+	out.Write(make([]byte, pad))
 	return out.Bytes()
 }
 
@@ -730,6 +762,7 @@ type record0Params struct {
 	guideIdx        uint32
 	langCode        uint32
 	hasFonts        bool
+	extraDataFlags  uint32
 	exth            []byte
 	fullTitle       []byte
 	uid             uint32
@@ -784,7 +817,7 @@ func buildRecord0(p record0Params) []byte {
 	binary.BigEndian.PutUint32(hdr[224:228], nullIndex) // SRCS
 	binary.BigEndian.PutUint32(hdr[232:236], nullIndex)
 	binary.BigEndian.PutUint32(hdr[236:240], nullIndex)
-	binary.BigEndian.PutUint32(hdr[240:244], 1) // extra_data_flags = 1 (multibyte trailing marker)
+	binary.BigEndian.PutUint32(hdr[240:244], p.extraDataFlags)
 
 	// KF8 indices
 	binary.BigEndian.PutUint32(hdr[244:248], p.ncxIdx)
@@ -800,9 +833,9 @@ func buildRecord0(p record0Params) []byte {
 	out.Write(hdr)
 	out.Write(p.exth)
 	out.Write(p.fullTitle)
-	// Align and append standard 8192-byte padding like Calibre / KindleGen.
+	// Standard 8192-byte DTP padding matching Calibre / KindleGen.
 	out.Write(make([]byte, 8192))
-	return align4(out.Bytes())
+	return out.Bytes()
 }
 
 func buildPalmDB(title string, mod time.Time, records [][]byte) []byte {
@@ -865,15 +898,29 @@ func asciiPalmName(title string) []byte {
 }
 
 func wrapFontRecord(fontBytes []byte) []byte {
-	// Uncompressed MOBI FONT record (24-byte header + raw TTF/OTF bytes).
+	// Zlib-compressed MOBI FONT record matching Calibre write_font_record.
+	var zbuf bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&zbuf, zlib.BestCompression)
+	payload := fontBytes
+	flags := uint32(0)
+	if err == nil {
+		if _, werr := zw.Write(fontBytes); werr == nil {
+			if cerr := zw.Close(); cerr == nil {
+				payload = zbuf.Bytes()
+				flags = 1 // zlib compressed
+			}
+		}
+	}
 	hdr := make([]byte, 24)
 	copy(hdr[0:4], "FONT")
 	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(fontBytes)))
-	binary.BigEndian.PutUint32(hdr[8:12], 0)  // flags: uncompressed, unencrypted
+	binary.BigEndian.PutUint32(hdr[8:12], flags)
 	binary.BigEndian.PutUint32(hdr[12:16], 24) // data offset
-	out := make([]byte, 0, 24+len(fontBytes))
+	binary.BigEndian.PutUint32(hdr[16:20], 0)  // xor key len
+	binary.BigEndian.PutUint32(hdr[20:24], 24) // xor key start
+	out := make([]byte, 0, 24+len(payload))
 	out = append(out, hdr...)
-	out = append(out, fontBytes...)
+	out = append(out, payload...)
 	return out
 }
 
@@ -890,25 +937,193 @@ func isRasterImage(data []byte, mime string) bool {
 	return false
 }
 
-func ensureJPEG(data []byte, mime string) ([]byte, string) {
-	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
-		return data, "image/jpeg"
+// jfifAPP0 is a standard 18-byte JFIF 1.01 APP0 segment required by Amazon's Kindle
+// native JPEG renderer (Go's stdlib image/jpeg omits JFIF headers by default).
+var jfifAPP0 = []byte{
+	0xFF, 0xE0, 0x00, 0x10,
+	'J', 'F', 'I', 'F', 0x00,
+	0x01, 0x01,
+	0x00,
+	0x00, 0x01,
+	0x00, 0x01,
+	0x00, 0x00,
+}
+
+// normalizeJPEGForKindle ensures a JPEG stream begins with a JFIF APP0 segment
+// and strips any APP1 (EXIF/XMP) segments that break Kindle cover display.
+func normalizeJPEGForKindle(raw []byte) []byte {
+	if len(raw) < 4 || raw[0] != 0xFF || raw[1] != 0xD8 {
+		return raw
 	}
+	var out bytes.Buffer
+	out.Grow(len(raw) + len(jfifAPP0))
+	out.Write([]byte{0xFF, 0xD8})
+	out.Write(jfifAPP0)
+
+	i := 2
+	for i < len(raw) {
+		if raw[i] != 0xFF {
+			out.Write(raw[i:])
+			return out.Bytes()
+		}
+		for i < len(raw) && raw[i] == 0xFF {
+			i++
+		}
+		if i >= len(raw) {
+			break
+		}
+		marker := raw[i]
+		i++
+		if marker == 0xDA || marker == 0xD9 {
+			out.WriteByte(0xFF)
+			out.WriteByte(marker)
+			out.Write(raw[i:])
+			return out.Bytes()
+		}
+		if (marker >= 0xD0 && marker <= 0xD7) || marker == 0x01 {
+			out.WriteByte(0xFF)
+			out.WriteByte(marker)
+			continue
+		}
+		if i+2 > len(raw) {
+			break
+		}
+		segLen := int(binary.BigEndian.Uint16(raw[i : i+2]))
+		if segLen < 2 || i+segLen > len(raw) {
+			out.WriteByte(0xFF)
+			out.WriteByte(marker)
+			out.Write(raw[i:])
+			return out.Bytes()
+		}
+		// Drop existing APP0 (replaced by canonical JFIF above) and APP1 (EXIF/XMP).
+		if marker != 0xE0 && marker != 0xE1 {
+			out.WriteByte(0xFF)
+			out.WriteByte(marker)
+			out.Write(raw[i : i+segLen])
+		}
+		i += segLen
+	}
+	return out.Bytes()
+}
+
+func flattenImageToOpaque(src image.Image) *image.RGBA {
+	b := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Over)
+	return dst
+}
+
+func scaleImageFit(src image.Image, maxW, maxH int) image.Image {
+	b := src.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	if sw <= 0 || sh <= 0 || (sw <= maxW && sh <= maxH) {
+		return src
+	}
+	dw, dh := sw, sh
+	if dw > maxW {
+		dh = dh * maxW / dw
+		dw = maxW
+	}
+	if dh > maxH {
+		dw = dw * maxH / dh
+		dh = maxH
+	}
+	if dw < 1 {
+		dw = 1
+	}
+	if dh < 1 {
+		dh = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < dh; y++ {
+		sy0 := b.Min.Y + y*sh/dh
+		sy1 := b.Min.Y + (y+1)*sh/dh
+		if sy1 <= sy0 {
+			sy1 = sy0 + 1
+		}
+		if sy1 > b.Max.Y {
+			sy1 = b.Max.Y
+		}
+		for x := 0; x < dw; x++ {
+			sx0 := b.Min.X + x*sw/dw
+			sx1 := b.Min.X + (x+1)*sw/dw
+			if sx1 <= sx0 {
+				sx1 = sx0 + 1
+			}
+			if sx1 > b.Max.X {
+				sx1 = b.Max.X
+			}
+			var sr, sg, sb, cnt uint64
+			for sy := sy0; sy < sy1; sy++ {
+				for sx := sx0; sx < sx1; sx++ {
+					r, g, bl, _ := src.At(sx, sy).RGBA()
+					sr += uint64(r >> 8)
+					sg += uint64(g >> 8)
+					sb += uint64(bl >> 8)
+					cnt++
+				}
+			}
+			if cnt == 0 {
+				cnt = 1
+			}
+			dst.SetRGBA(x, y, color.RGBA{
+				R: uint8(sr / cnt),
+				G: uint8(sg / cnt),
+				B: uint8(sb / cnt),
+				A: 0xFF,
+			})
+		}
+	}
+	return dst
+}
+
+func encodeKindleJPEG(img image.Image, quality int) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return normalizeJPEGForKindle(buf.Bytes()), nil
+}
+
+// prepareKindleCoverAndThumb converts the cover into a JFIF-tagged, EXIF-free JPEG
+// and builds a separate <=300x300 (<=32KB) JPEG thumbnail matching Calibre's Resources.
+func prepareKindleCoverAndThumb(data []byte, mime string) (coverBytes, thumbBytes []byte, outMIME string) {
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
+		if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+			norm := normalizeJPEGForKindle(data)
+			return norm, nil, "image/jpeg"
+		}
 		if mime == "" {
 			mime = sniffMIME(data)
 		}
-		return data, mime
+		return data, nil, mime
 	}
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
-		if mime == "" {
-			mime = sniffMIME(data)
+
+	opaque := flattenImageToOpaque(img)
+	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		coverBytes = normalizeJPEGForKindle(data)
+	} else {
+		if enc, encErr := encodeKindleJPEG(opaque, 90); encErr == nil {
+			coverBytes = enc
+		} else {
+			return data, nil, sniffMIME(data)
 		}
-		return data, mime
 	}
-	return buf.Bytes(), "image/jpeg"
+
+	thumbImg := scaleImageFit(opaque, 300, 300)
+	for q := 85; q >= 45; q -= 10 {
+		enc, encErr := encodeKindleJPEG(thumbImg, q)
+		if encErr != nil {
+			break
+		}
+		thumbBytes = enc
+		if len(thumbBytes) <= 32*1024 {
+			break
+		}
+	}
+	return coverBytes, thumbBytes, "image/jpeg"
 }
 
 func sniffMIME(data []byte) string {

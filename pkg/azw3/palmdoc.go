@@ -4,28 +4,40 @@ import "unicode/utf8"
 
 const maxRecordSize = 4096
 
-// splitTextRecords splits raw UTF-8 bytes into chunks of at most 4096 bytes
-// without cutting inside a multi-byte UTF-8 rune, so extra_data_flags can stay 0.
-func splitTextRecords(raw []byte) [][]byte {
+type textRecordChunk struct {
+	data    []byte // Always 4096 bytes for all records except possibly the last
+	overlap []byte // 0..3 trailing UTF-8 continuation bytes from the next record
+}
+
+// splitTextRecords splits raw UTF-8 bytes into strict 4096-byte PalmDOC text
+// records (as required by Kindle's O(1) pos/4096 random-access text reader).
+// Whenever a 4096-byte boundary splits a multi-byte UTF-8 rune, the remaining
+// 1..3 continuation bytes are returned in overlap so they can be stored in the
+// record's trailing multibyte-overlap trailer (extra_data_flags bit 0).
+func splitTextRecords(raw []byte) []textRecordChunk {
 	if len(raw) == 0 {
-		return [][]byte{{}}
+		return []textRecordChunk{{data: []byte{}}}
 	}
-	var chunks [][]byte
-	for len(raw) > 0 {
-		if len(raw) <= maxRecordSize {
-			chunks = append(chunks, raw)
+	chunks := make([]textRecordChunk, 0, (len(raw)+maxRecordSize-1)/maxRecordSize)
+	for pos := 0; pos < len(raw); {
+		end := pos + maxRecordSize
+		if end >= len(raw) {
+			chunks = append(chunks, textRecordChunk{data: raw[pos:]})
 			break
 		}
-		cut := maxRecordSize
-		// Walk back if we landed in the middle of a UTF-8 continuation sequence.
-		for cut > 0 && !utf8.RuneStart(raw[cut]) {
-			cut--
+		extra := 0
+		for end+extra < len(raw) && extra < 3 && !utf8.RuneStart(raw[end+extra]) {
+			extra++
 		}
-		if cut == 0 {
-			cut = maxRecordSize
+		var overlap []byte
+		if extra > 0 {
+			overlap = raw[end : end+extra]
 		}
-		chunks = append(chunks, raw[:cut])
-		raw = raw[cut:]
+		chunks = append(chunks, textRecordChunk{
+			data:    raw[pos:end],
+			overlap: overlap,
+		})
+		pos = end
 	}
 	return chunks
 }

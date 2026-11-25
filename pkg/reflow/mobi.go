@@ -242,15 +242,21 @@ func backSize(b []byte) (int, int) {
 	if len(b) == 0 {
 		return 0, 0
 	}
-	last := int(b[len(b)-1])
-	if last&0x80 == 0 {
-		return last, 1
+	// Backward-encoded MOBI variable-width integer: scan right-to-left, 7 bits
+	// per byte, stopping at the byte whose MSB (0x80) is set.
+	val := 0
+	shift := uint(0)
+	consumed := 0
+	for i := len(b) - 1; i >= 0 && consumed < 4; i-- {
+		c := b[i]
+		val |= int(c&0x7f) << shift
+		shift += 7
+		consumed++
+		if c&0x80 != 0 {
+			return val, consumed
+		}
 	}
-	if len(b) < 2 {
-		return 0, 0
-	}
-	v := (int(b[len(b)-2])<<7 | last&0x7f)
-	return v, 2
+	return 0, 0
 }
 
 func palmLZ77(in []byte) []byte {

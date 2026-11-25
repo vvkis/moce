@@ -157,13 +157,25 @@ func TestAZW3BinaryStructureAndReflowRoundTrip(t *testing.T) {
 	if !strings.Contains(chunkCNCX, "P-//*[@aid=") || strings.Contains(chunkCNCX, "0-//*[@aid=") {
 		t.Fatalf("invalid chunk selector in CNCX: %q", chunkCNCX[:min(len(chunkCNCX), 80)])
 	}
-	if got := binary.BigEndian.Uint32(rec0[240:244]); got != 1 {
-		t.Fatalf("extra_data_flags = %d, want 1", got)
+	if got := binary.BigEndian.Uint32(rec0[240:244]); got != 3 {
+		t.Fatalf("extra_data_flags = %d, want 3 (multibyte + TBS)", got)
 	}
-	// Verify cover resource was normalized to JPEG for Kindle native thumbnailing.
+	// Verify every non-final text record decompresses to EXACTLY 4096 bytes.
+	nTextRecs := int(binary.BigEndian.Uint16(rec0[8:10]))
+	for i := 1; i < nTextRecs; i++ {
+		body := stripTrailingTestData(recs[i], 3)
+		dec := decompressPalmDOC(body)
+		if len(dec) != maxRecordSize {
+			t.Fatalf("text record %d decompressed to %d bytes, want exact %d", i, len(dec), maxRecordSize)
+		}
+	}
+	// Verify cover resource (0) and thumbnail resource (1) are JFIF JPEGs.
 	firstRes := int(binary.BigEndian.Uint32(rec0[108:112]))
-	if len(recs[firstRes]) < 3 || recs[firstRes][0] != 0xFF || recs[firstRes][1] != 0xD8 {
-		t.Fatalf("expected JPEG cover resource, got %x", recs[firstRes][:8])
+	for k := 0; k < 2; k++ {
+		res := recs[firstRes+k]
+		if len(res) < 10 || res[0] != 0xFF || res[1] != 0xD8 || res[2] != 0xFF || res[3] != 0xE0 || string(res[6:10]) != "JFIF" {
+			t.Fatalf("resource %d expected JFIF JPEG, got %x", k, res[:min(len(res), 12)])
+		}
 	}
 
 	// Verify NCX CNCX contains Chinese titles.
@@ -221,10 +233,35 @@ func TestAZW3SkipVolumeAndEmbeddedFont(t *testing.T) {
 		t.Fatalf("expected embedded font bit in exth_flags: 0x%x", exthFlags)
 	}
 	firstRes := int(binary.BigEndian.Uint32(rec0[108:112]))
-	// Resource 0 is PNG cover, resource 1 is FONT record
-	if string(recs[firstRes+1][:4]) != "FONT" {
-		t.Fatalf("expected FONT record at %d, got %q", firstRes+1, recs[firstRes+1][:4])
+	// Resource 0 is cover JPEG, resource 1 is thumbnail JPEG, resource 2 is FONT record
+	if string(recs[firstRes+2][:4]) != "FONT" {
+		t.Fatalf("expected FONT record at %d, got %q", firstRes+2, recs[firstRes+2][:4])
 	}
+}
+
+func stripTrailingTestData(rec []byte, flags uint32) []byte {
+	f := flags >> 1
+	for f != 0 {
+		if f&1 != 0 {
+			sz := 0
+			shift := uint(0)
+			for i := len(rec) - 1; i >= 0; i-- {
+				b := rec[i]
+				sz |= int(b&0x7F) << shift
+				shift += 7
+				if b&0x80 != 0 {
+					break
+				}
+			}
+			rec = rec[:len(rec)-sz]
+		}
+		f >>= 1
+	}
+	if flags&1 != 0 && len(rec) > 0 {
+		sz := int(rec[len(rec)-1]&0x03) + 1
+		rec = rec[:len(rec)-sz]
+	}
+	return rec
 }
 
 func parsePalmRecords(t *testing.T, data []byte) [][]byte {
