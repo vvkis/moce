@@ -214,7 +214,8 @@ func trimExtra(rec []byte, flags uint32) []byte {
 		return rec
 	}
 	end := len(rec)
-	for bit := 0; bit < 16; bit++ {
+	// High bits (15..1) are backward-encoded variable-width trailing sections.
+	for bit := 15; bit >= 1; bit-- {
 		if flags&(1<<bit) == 0 || end == 0 {
 			continue
 		}
@@ -223,6 +224,13 @@ func trimExtra(rec []byte, flags uint32) []byte {
 			break
 		}
 		end -= size
+	}
+	// Bit 0 is the multibyte overlap entry: lower 2 bits of last byte + 1 bytes total.
+	if flags&1 != 0 && end > 0 {
+		overlap := int(rec[end-1]&3) + 1
+		if overlap <= end {
+			end -= overlap
+		}
 	}
 	if end < 0 {
 		return rec

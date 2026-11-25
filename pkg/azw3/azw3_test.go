@@ -151,6 +151,21 @@ func TestAZW3BinaryStructureAndReflowRoundTrip(t *testing.T) {
 		t.Fatal("missing EOF record")
 	}
 
+	// Verify Chunk CNCX uses KF8 parent selector "P-//*[@aid=...]".
+	chunkCount := int(binary.BigEndian.Uint32(recs[chunkIdx][24:28]))
+	chunkCNCX := string(recs[int(chunkIdx)+1+chunkCount])
+	if !strings.Contains(chunkCNCX, "P-//*[@aid=") || strings.Contains(chunkCNCX, "0-//*[@aid=") {
+		t.Fatalf("invalid chunk selector in CNCX: %q", chunkCNCX[:min(len(chunkCNCX), 80)])
+	}
+	if got := binary.BigEndian.Uint32(rec0[240:244]); got != 1 {
+		t.Fatalf("extra_data_flags = %d, want 1", got)
+	}
+	// Verify cover resource was normalized to JPEG for Kindle native thumbnailing.
+	firstRes := int(binary.BigEndian.Uint32(rec0[108:112]))
+	if len(recs[firstRes]) < 3 || recs[firstRes][0] != 0xFF || recs[firstRes][1] != 0xD8 {
+		t.Fatalf("expected JPEG cover resource, got %x", recs[firstRes][:8])
+	}
+
 	// Verify NCX CNCX contains Chinese titles.
 	ncxCount := int(binary.BigEndian.Uint32(recs[ncxIdx][24:28]))
 	cncxCount := int(binary.BigEndian.Uint32(recs[ncxIdx][52:56]))
@@ -162,6 +177,10 @@ func TestAZW3BinaryStructureAndReflowRoundTrip(t *testing.T) {
 		if !strings.Contains(cncxRaw, want) {
 			t.Fatalf("NCX CNCX missing %q", want)
 		}
+	}
+	// BFS order: top-level items ("封面", "第一卷 上游", "后记") appear before depth-1 children ("第一章 纸灯").
+	if strings.Index(cncxRaw, "后记") > strings.Index(cncxRaw, "第一章 纸灯") {
+		t.Fatalf("NCX should be breadth-first (all depth-0 before depth-1), got CNCX order: %q", cncxRaw)
 	}
 
 	// 2. Round-trip through moce's own reflow.Open("河灯.azw3", raw)
