@@ -717,7 +717,7 @@ export function Txt2EpubPanel({ meta }: { meta: ToolMeta }) {
                     </Button>
                   </div>
                   <p className="text-[11px] leading-5 text-muted">
-                    默认样式兼容 KOReader 与 Kindle：页边距 5%、行距 1.8、段距 0.45em、首行缩进 2em，不锁死 px 字号，也不加 !important。
+                    默认样式对齐 Calibre：行距与页边距交由阅读器原生调节（填 0 不写死），段距 1em、首行缩进 2em，不锁死 px 字号，也不加 !important。
                   </p>
                 </div>
               ) : null}
