@@ -680,3 +680,38 @@ func TestApplyEditsRenameMergeAndLevel(t *testing.T) {
 		t.Fatalf("expected non-zero runes on chapter entry: %+v", edited.Entries[1])
 	}
 }
+
+func TestShortVolumeWithAndWithoutFollowingChapters(t *testing.T) {
+	text := strings.Join([]string{
+		"卷一 初入江湖",
+		"第一章 梦",
+		"　　他醒了过来。",
+		"卷二 刀出北邙",
+		"第五十一章 刀出北邙",
+		"　　长刀出鞘。",
+		"卷三 其实是普通文本因为后面没有章节",
+		"　　这只是对话或感叹，后面没有新章了。",
+		"后记",
+		"　　写完了。",
+	}, "\n")
+	res, err := Split(text, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(titles(res.Nodes), "\n")
+	want := strings.Join([]string{
+		"卷一 初入江湖",
+		"  第一章 梦",
+		"卷二 刀出北邙",
+		"  第五十一章 刀出北邙",
+		"后记",
+	}, "\n")
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// The unfollowed "卷三 ..." must remain inside 第五十一章's body text, zero loss.
+	ch51 := strings.Join(res.Nodes[1].Children[0].Paragraphs, "|")
+	if !strings.Contains(ch51, "卷三 其实是普通文本因为后面没有章节") || !strings.Contains(ch51, "后面没有新章了") {
+		t.Fatalf("unfollowed short volume lost from body: %s", ch51)
+	}
+}

@@ -16,7 +16,7 @@ const (
 	numeralClass = `[0-9０-９零〇一二三四五六七八九十百千万两壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+`
 	// DefaultChapterPattern matches 第X章/节/回 and standalone headings such as 序章, 楔子, 番外, 尾声, 后记.
 	DefaultChapterPattern = `第\s*` + numeralClass + `\s*[章节回].*|序章.*|楔子.*|前言.*|序言.*|引言.*|引子.*|番外.*|尾声.*|后记.*|终章.*|大结局.*|完结感言.*|附录.*`
-	// DefaultVolumePattern matches 第X卷 and 第X部.
+	// DefaultVolumePattern matches 第X卷/部 and short forms like 卷一 / 上卷.
 	DefaultVolumePattern = `第\s*` + numeralClass + `\s*[卷部].*`
 	// DefaultFallbackRunes is the chunk size used when no headings are found.
 	DefaultFallbackRunes = 8000
@@ -128,10 +128,11 @@ func Split(text string, opt Options) (Result, error) {
 
 	lines := strings.Split(text, "\n")
 	type section struct {
-		title   string
-		kind    int // 0 preface, 1 chapter, 2 volume
-		special bool
-		lines   []string
+		title    string
+		kind     int // 0 preface, 1 chapter, 2 volume
+		special  bool
+		shortVol bool
+		lines    []string
 	}
 	var sections []section
 	cur := -1
@@ -152,8 +153,12 @@ func Split(text string, opt Options) (Result, error) {
 		var title string
 		var kind int
 		var special bool
+		var shortVol bool
 		if useMoon {
 			title, ok = chapterTitle(trimmed)
+			if ok {
+				_, _, shortVol = splitShortVolume(title)
+			}
 			if !ok && known[titleKey(trimmed)] {
 				title, ok = cleanTitle(trimmed), true
 			}
@@ -163,9 +168,10 @@ func Split(text string, opt Options) (Result, error) {
 		if ok {
 			anyHeading = true
 			sections = append(sections, section{
-				title:   title,
-				kind:    kind,
-				special: special,
+				title:    title,
+				kind:     kind,
+				special:  special,
+				shortVol: shortVol,
 			})
 			cur = len(sections) - 1
 			continue
@@ -187,8 +193,9 @@ func Split(text string, opt Options) (Result, error) {
 	if useMoon {
 		entries := make([]hEntry, len(sections))
 		for i, s := range sections {
-			entries[i] = hEntry{title: s.title, lines: s.lines, toc: true}
+			entries[i] = hEntry{title: s.title, lines: s.lines, toc: true, shortVol: s.shortVol}
 		}
+		entries = filterUnfollowedShortVolumes(entries)
 		entries = dropTocEchoes(entries)
 		// A source TOC that already has depth is kept. Plain text gets one more
 		// pass so 部 contains 卷 and 卷 contains 章, using the same rank order
@@ -306,7 +313,105 @@ func volumeLikeTitle(title string) bool {
 	if s == "" || rootSpecial.MatchString(s) {
 		return false
 	}
-	return reVolumeStart.MatchString(s)
+	if reVolumeStart.MatchString(s) {
+		return true
+	}
+	_, _, ok := splitShortVolume(s)
+	return ok
+}
+
+// filterUnfollowedShortVolumes validates short-form volume candidates (e.g. 「卷一 初入江湖」「上卷」):
+// a short-form volume is only kept as a heading when there is a following chapter heading
+// (before the next volume or end of book), and it does not swallow a long chunk of body prose
+// before that chapter. Otherwise it is folded back into the previous section as ordinary text.
+func filterUnfollowedShortVolumes(entries []hEntry) []hEntry {
+	hasShort := false
+	hasRegularChapter := false
+	for _, e := range entries {
+		if e.shortVol {
+			hasShort = true
+			continue
+		}
+		if e.title != "" {
+			if _, ch, isVol := volumeTitle(e.title); !isVol || ch != "" {
+				if !rootSpecial.MatchString(titleKey(e.title)) && !reFanwai.MatchString(titleKey(e.title)) {
+					hasRegularChapter = true
+				}
+			}
+		}
+	}
+	if !hasShort {
+		return entries
+	}
+	// If the book has no regular chapters at all, short volumes act as top-level sections
+	// only when there are at least 2 of them; a lone "卷一 xxx" in a chapterless text is prose.
+	if !hasRegularChapter {
+		shortCount := 0
+		for _, e := range entries {
+			if e.shortVol {
+				shortCount++
+			}
+		}
+		if shortCount >= 2 {
+			return entries
+		}
+	}
+
+	out := make([]hEntry, 0, len(entries))
+	for i, e := range entries {
+		if !e.shortVol {
+			out = append(out, e)
+			continue
+		}
+		// Check whether a real chapter follows before the next volume/part/rootSpecial/EOF,
+		// and ensure the short volume itself doesn't contain long body prose (which indicates
+		// an accidental match inside a chapter's text rather than a true volume divider).
+		followedByChapter := false
+		if hasRegularChapter {
+			for j := i + 1; j < len(entries); j++ {
+				nxt := entries[j]
+				if nxt.title == "" {
+					continue
+				}
+				if nxt.shortVol || rootSpecial.MatchString(titleKey(nxt.title)) || reFanwai.MatchString(titleKey(nxt.title)) {
+					break
+				}
+				if _, ch, isVol := volumeTitle(nxt.title); isVol && ch == "" {
+					break
+				}
+				followedByChapter = true
+				break
+			}
+		}
+		bodyLines, bodyRunes := countNonEmpty(e.lines)
+		tooMuchBody := bodyLines > 5 || bodyRunes > 600
+		if followedByChapter && !tooMuchBody {
+			out = append(out, e)
+			continue
+		}
+		// Fold false-positive short volume back into the previous section as normal text.
+		if len(out) > 0 {
+			prev := &out[len(out)-1]
+			prev.lines = append(prev.lines, e.title)
+			prev.lines = append(prev.lines, e.lines...)
+		} else {
+			lines := append([]string{e.title}, e.lines...)
+			out = append(out, hEntry{title: "", lines: lines, toc: true})
+		}
+	}
+	return out
+}
+
+func countNonEmpty(lines []string) (count, runes int) {
+	for _, ln := range lines {
+		t := trimOuter(ln)
+		if t == "" {
+			continue
+		}
+		count++
+		runes += utf8.RuneCountInString(t)
+	}
+	return count, runes
 }
 
 func finish(nodes []Node, fallback bool) Result {

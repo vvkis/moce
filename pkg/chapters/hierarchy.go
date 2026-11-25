@@ -37,6 +37,7 @@ type hEntry struct {
 	lines         []string
 	depth         int
 	toc           bool
+	shortVol      bool
 	customKind    int
 	customSpecial bool
 }
@@ -149,7 +150,8 @@ func chapterNumber(title string) (string, bool) {
 	return "", false
 }
 
-// volumeTitle returns the normalized 第N卷/部 and, for “第一卷-第一章 标题”, the chapter tail.
+// volumeTitle returns the normalized 第N卷/部 (or short form 卷一 / 上卷)
+// and, for “第一卷-第一章 标题” / “卷一-第一章 标题”, the chapter tail.
 // 部 uses the same restart rule as 卷 so an existing volume heading still parents the following chapters.
 func volumeTitle(title string) (volume, chapter string, ok bool) {
 	title = titleKey(title)
@@ -164,6 +166,85 @@ func volumeTitle(title string) (volume, chapter string, ok bool) {
 			return volume, tail, true
 		}
 		return volume, "", true
+	}
+	if vol, suffix, found := splitShortVolume(title); found {
+		tail := strings.TrimSpace(stripVolumeSep(suffix))
+		if _, isCh := chapterNumber(tail); isCh {
+			return vol, tail, true
+		}
+		return vol, "", true
+	}
+	return "", "", false
+}
+
+func isVolumeOrdinalRune(r rune) bool {
+	if chineseNumeral[r] || (r >= '0' && r <= '9') || (r >= '０' && r <= '９') {
+		return true
+	}
+	switch r {
+	case '上', '中', '下', '前', '后', '终', 'I', 'V', 'X', 'L', 'C', 'i', 'v', 'x':
+		return true
+	}
+	return false
+}
+
+func isHeadingSepRune(r rune) bool {
+	switch r {
+	case ' ', '\t', '\u3000', ':', '：', '-', '—', '·', '・', '、', '（', '(', '【', '[', '《':
+		return true
+	}
+	return false
+}
+
+// splitShortVolume matches volume headings without 「第」, such as:
+//   - 「卷一 初入江湖」「卷二 刀出北邙」「卷12 风起」「卷上 序」
+//   - 「上卷 初入江湖」「下卷 归途」
+// A non-empty suffix MUST begin with a clear separator so prose like 「卷一团纸」
+// or 「上卷的纸页」 is never misclassified.
+func splitShortVolume(line string) (volume, suffix string, ok bool) {
+	line = titleKey(line)
+	if line == "" {
+		return "", "", false
+	}
+	rs := []rune(line)
+	if len(rs) < 2 {
+		return "", "", false
+	}
+	// Pattern A: 卷 + ordinal token (+ optional sep + title)
+	if rs[0] == '卷' {
+		end := 1
+		for end < len(rs) && isVolumeOrdinalRune(rs[end]) {
+			end++
+		}
+		if end == 1 {
+			return "", "", false
+		}
+		token := string(rs[1:end])
+		if !isNumberToken(token) && token != "上" && token != "中" && token != "下" && token != "前" && token != "后" && token != "终" {
+			return "", "", false
+		}
+		if end < len(rs) && !isHeadingSepRune(rs[end]) {
+			return "", "", false
+		}
+		suffix = string(rs[end:])
+		if looksLikeProseSentence(suffix) {
+			return "", "", false
+		}
+		return "卷" + token, suffix, true
+	}
+	// Pattern B: [上中下前后终]卷 (+ optional sep + title)
+	if rs[1] == '卷' {
+		switch rs[0] {
+		case '上', '中', '下', '前', '后', '终':
+			if len(rs) > 2 && !isHeadingSepRune(rs[2]) {
+				return "", "", false
+			}
+			suffix = string(rs[2:])
+			if looksLikeProseSentence(suffix) {
+				return "", "", false
+			}
+			return string(rs[:2]), suffix, true
+		}
 	}
 	return "", "", false
 }
@@ -237,6 +318,9 @@ func chapterTitleCore(line string) (string, bool) {
 			}
 			return line, true
 		}
+	}
+	if _, _, ok := splitShortVolume(line); ok {
+		return line, true
 	}
 	for _, title := range specialTitles {
 		if line == title || specialSuffix(line, title) {
@@ -710,6 +794,9 @@ func markerRank(title string) (rank int, parentable bool) {
 				return item.rank, true
 			}
 		}
+	}
+	if _, _, ok := splitShortVolume(key); ok {
+		return 2, true
 	}
 	return 3, true
 }
