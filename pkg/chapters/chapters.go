@@ -56,7 +56,17 @@ type Entry struct {
 	Level      int    `json:"level"`
 	Kind       string `json:"kind"`
 	Paragraphs int    `json:"paragraphs"`
+	Runes      int    `json:"runes"`
 	Snippet    string `json:"snippet"`
+}
+
+// Edit describes a user adjustment to one entry in Flatten(nodes).
+type Edit struct {
+	Index int    `json:"index"`
+	Title string `json:"title,omitempty"`
+	Merge bool   `json:"merge,omitempty"`
+	Level int    `json:"level,omitempty"`
+	Delta int    `json:"delta,omitempty"`
 }
 
 // Result is the split book.
@@ -69,7 +79,7 @@ type Result struct {
 }
 
 var (
-	rootSpecial         = regexp.MustCompile(`^(序章|楔子|前言|序言|引言|引子|尾声|后记|终章|大结局|完结感言|附录)`)
+	rootSpecial         = regexp.MustCompile(`^(序章|楔子|前言|序言|引言|引子|尾声|后记|终章|大结局|完结感言|完本感言|附录)`)
 	reFanwai            = regexp.MustCompile(`^番外`)
 	reVolumeCloser      = regexp.MustCompile(`^第\s*` + numeralClass + `\s*[卷部]` + closerSep + closerWord + `$`)
 	reShortVolumeCloser = regexp.MustCompile(`^[卷部]\s*` + numeralClass + closerSep + closerWord + `$`)
@@ -166,14 +176,15 @@ func Split(text string, opt Options) (Result, error) {
 		}
 		sections[cur].lines = append(sections[cur].lines, line)
 	}
-	if useMoon {
-		if !anyHeading {
-			nodes, err := fallback(lines, opt)
-			if err != nil {
-				return Result{}, err
-			}
-			return finish(nodes, true), nil
+	if !anyHeading {
+		nodes, err := fallback(lines, opt)
+		if err != nil {
+			return Result{}, err
 		}
+		return finish(nodes, true), nil
+	}
+
+	if useMoon {
 		entries := make([]hEntry, len(sections))
 		for i, s := range sections {
 			entries[i] = hEntry{title: s.title, lines: s.lines, toc: true}
@@ -197,14 +208,9 @@ func Split(text string, opt Options) (Result, error) {
 		return finish(roots, false), nil
 	}
 
-	if !anyHeading {
-		nodes, err := fallback(lines, opt)
-		if err != nil {
-			return Result{}, err
-		}
-		return finish(nodes, true), nil
-	}
-
+	// Custom regex path: still runs printed-TOC folding, source TOC preservation,
+	// fanwai grouping, and multi-level rank nesting so users keep full hierarchy
+	// benefits after tweaking patterns.
 	hasChapter := false
 	for _, s := range sections {
 		if s.kind == 1 {
@@ -212,42 +218,22 @@ func Split(text string, opt Options) (Result, error) {
 			break
 		}
 	}
-	if !hasChapter {
-		for i := range sections {
-			if sections[i].kind == 2 {
-				sections[i].kind = 1
-			}
+	entries := make([]hEntry, len(sections))
+	for i, s := range sections {
+		kind := s.kind
+		if !hasChapter && kind == 2 {
+			kind = 1
 		}
+		entries[i] = hEntry{title: s.title, lines: s.lines, toc: true, customKind: kind, customSpecial: s.special}
 	}
-
+	entries = dropTocEchoes(entries)
+	if kept := preserve(entries, opt.Headings); kept != nil {
+		entries = kept
+	} else {
+		entries = nestCustomEntries(entries, hasChapter)
+	}
 	clean := textclean.Options{MergeBrokenLines: opt.MergeBrokenLines, DropEmptyLines: opt.DropEmptyLines}
-	var roots []Node
-	volIndex := -1
-	for _, s := range sections {
-		paras := textclean.Paragraphs(s.lines, clean)
-		if s.kind == 0 {
-			if len(paras) == 0 {
-				continue
-			}
-			roots = append(roots, Node{Title: "前言", Paragraphs: paras})
-			continue
-		}
-		node := Node{Title: s.title, Paragraphs: paras}
-		if s.kind == 2 {
-			roots = append(roots, node)
-			volIndex = len(roots) - 1
-			continue
-		}
-		if volIndex >= 0 && !s.special && hasChapter {
-			roots[volIndex].Children = append(roots[volIndex].Children, node)
-			continue
-		}
-		roots = append(roots, node)
-		if s.special {
-			volIndex = -1
-		}
-	}
-	roots = collapseLonelyVolumes(roots)
+	roots := collapseLonelyVolumes(treeFrom(entries, clean))
 	if len(roots) == 0 {
 		return Result{}, fmt.Errorf("没有可转换的正文")
 	}
@@ -390,7 +376,10 @@ func matchHeading(trimmed string, chapterRe, volumeRe *regexp.Regexp) (kind int,
 	if strings.ContainsAny(display, "。！？!?") && n > 40 {
 		return 0, false, "", false
 	}
-	if reFanwai.MatchString(display) {
+	if strings.Contains(display, "。") {
+		return 0, false, "", false
+	}
+	if isFanwaiHeading(display) {
 		return 2, false, cleanTitle(display), true
 	}
 	if volumeRe != nil && prefixMatch(volumeRe, display) {
@@ -400,6 +389,25 @@ func matchHeading(trimmed string, chapterRe, volumeRe *regexp.Regexp) (kind int,
 		return 1, rootSpecial.MatchString(display), cleanTitle(display), true
 	}
 	return 0, false, "", false
+}
+
+func isFanwaiHeading(s string) bool {
+	if s == "番外" {
+		return true
+	}
+	if !strings.HasPrefix(s, "番外") {
+		return false
+	}
+	rest := s[len("番外"):]
+	if rest == "" {
+		return true
+	}
+	r := []rune(rest)[0]
+	switch r {
+	case ' ', '\t', '\u3000', ':', '：', '-', '—', '·', '（', '(', '【', '[', '篇':
+		return true
+	}
+	return isNumberToken(string(r))
 }
 
 func stripDatePrefix(s string) string {
@@ -452,11 +460,16 @@ func Flatten(nodes []Node) []Entry {
 					}
 				}
 			}
+			runes := 0
+			for _, p := range n.Paragraphs {
+				runes += utf8.RuneCountInString(p)
+			}
 			out = append(out, Entry{
 				Title:      n.Title,
 				Level:      level,
 				Kind:       kind,
 				Paragraphs: len(n.Paragraphs),
+				Runes:      runes,
 				Snippet:    snip,
 			})
 			walk(n.Children, level+1)
@@ -464,6 +477,109 @@ func Flatten(nodes []Node) []Entry {
 	}
 	walk(nodes, 1)
 	return out
+}
+
+// ApplyEdits applies user TOC adjustments (rename, merge into previous, level change)
+// keyed by the 0-based index in Flatten(nodes) and returns a rebuilt Result.
+func ApplyEdits(res Result, edits []Edit) Result {
+	if len(edits) == 0 || len(res.Nodes) == 0 {
+		return res
+	}
+	byIdx := make(map[int]Edit, len(edits))
+	for _, e := range edits {
+		byIdx[e.Index] = e
+	}
+	type flatNode struct {
+		title      string
+		level      int
+		paragraphs []string
+	}
+	var flat []flatNode
+	var walk func([]Node, int)
+	walk = func(ns []Node, lvl int) {
+		for _, n := range ns {
+			flat = append(flat, flatNode{
+				title:      n.Title,
+				level:      lvl,
+				paragraphs: append([]string(nil), n.Paragraphs...),
+			})
+			walk(n.Children, lvl+1)
+		}
+	}
+	walk(res.Nodes, 1)
+
+	var kept []flatNode
+	var leading []string
+	for i, item := range flat {
+		ed, ok := byIdx[i]
+		if ok && ed.Merge {
+			var bits []string
+			if strings.TrimSpace(item.title) != "" {
+				bits = append(bits, item.title)
+			}
+			bits = append(bits, item.paragraphs...)
+			if len(kept) > 0 {
+				kept[len(kept)-1].paragraphs = append(kept[len(kept)-1].paragraphs, bits...)
+			} else {
+				leading = append(leading, bits...)
+			}
+			continue
+		}
+		if ok {
+			if t := strings.TrimSpace(ed.Title); t != "" {
+				item.title = t
+			}
+			if ed.Level > 0 {
+				item.level = ed.Level
+			} else if ed.Delta != 0 {
+				item.level += ed.Delta
+			}
+		}
+		if item.level < 1 {
+			item.level = 1
+		}
+		if len(kept) == 0 {
+			item.level = 1
+			if len(leading) > 0 {
+				item.paragraphs = append(append([]string(nil), leading...), item.paragraphs...)
+				leading = nil
+			}
+		} else if item.level > kept[len(kept)-1].level+1 {
+			item.level = kept[len(kept)-1].level + 1
+		}
+		kept = append(kept, item)
+	}
+	if len(kept) == 0 {
+		if len(leading) > 0 {
+			kept = append(kept, flatNode{title: "正文", level: 1, paragraphs: leading})
+		} else {
+			return res
+		}
+	}
+
+	var roots []Node
+	type frame struct {
+		depth int
+		path  []int
+	}
+	var stack []frame
+	for _, item := range kept {
+		node := Node{Title: item.title, Paragraphs: item.paragraphs}
+		for len(stack) > 0 && stack[len(stack)-1].depth >= item.level {
+			stack = stack[:len(stack)-1]
+		}
+		var p []int
+		if len(stack) == 0 {
+			roots = append(roots, node)
+			p = []int{len(roots) - 1}
+		} else {
+			parent := nodeAt(&roots, stack[len(stack)-1].path)
+			parent.Children = append(parent.Children, node)
+			p = append(append([]int{}, stack[len(stack)-1].path...), len(parent.Children)-1)
+		}
+		stack = append(stack, frame{depth: item.level, path: p})
+	}
+	return finish(roots, res.Fallback)
 }
 
 func snippet(s string) string {
@@ -491,10 +607,15 @@ func countBodies(nodes []Node) int {
 
 func countVolumes(nodes []Node) int {
 	n := 0
-	for _, node := range nodes {
-		if len(node.Children) > 0 {
-			n++
+	var walk func([]Node)
+	walk = func(ns []Node) {
+		for _, node := range ns {
+			if len(node.Children) > 0 {
+				n++
+				walk(node.Children)
+			}
 		}
 	}
+	walk(nodes)
 	return n
 }

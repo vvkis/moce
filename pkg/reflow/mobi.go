@@ -39,8 +39,12 @@ func openMOBI(data []byte, format string) (Book, error) {
 	}
 	var cover []byte
 	var coverName string
-	if meta.image > 0 && meta.image < len(recs) {
-		img := recs[meta.image]
+	imgIdx := meta.image
+	if imgIdx >= 0 && meta.coverOff >= 0 {
+		imgIdx += meta.coverOff
+	}
+	if imgIdx > 0 && imgIdx < len(recs) {
+		img := recs[imgIdx]
 		if len(img) > 8 && (isJPEG(img) || isPNG(img)) {
 			cover = img
 			if isPNG(img) {
@@ -75,7 +79,7 @@ func isPNG(b []byte) bool {
 type mobiMeta struct {
 	title, author, publisher, language, published, isbn, intro string
 	tags                                                       []string
-	image, kf8                                                 int
+	image, coverOff, kf8                                       int
 }
 
 func palmRecords(data []byte) ([][]byte, error) {
@@ -115,27 +119,37 @@ func readMOBISection(recs [][]byte, rec0 int) (string, mobiMeta, error) {
 	comp := binary.BigEndian.Uint16(head[0:2])
 	textLen := binary.BigEndian.Uint32(head[4:8])
 	count := int(binary.BigEndian.Uint16(head[8:10]))
-	meta := mobiMeta{image: -1, kf8: -1}
+	meta := mobiMeta{image: -1, coverOff: -1, kf8: -1}
 	var huffRec, huffN, extra uint32
+	var fdstRec uint32
+	var fileVer uint32
 	if len(head) >= 132 && string(head[16:20]) == "MOBI" {
 		headerLen := binary.BigEndian.Uint32(head[20:24])
-		if int(headerLen)+16 <= len(head) {
-			if headerLen > 108 {
-				meta.image = int(u32(head, 16+108))
+		headerEnd := 16 + int(headerLen)
+		if headerEnd <= len(head) {
+			fileVer = u32(head, 36)
+			if headerEnd >= 112 {
+				if v := u32(head, 108); v != 0xFFFFFFFF {
+					meta.image = int(v)
+				}
 			}
-			if headerLen > 116 {
-				huffRec = u32(head, 16+112)
-				huffN = u32(head, 16+116)
+			if headerEnd >= 120 {
+				huffRec = u32(head, 112)
+				huffN = u32(head, 116)
 			}
-			if headerLen > 240 {
-				extra = u32(head, 16+240)
+			if fileVer >= 8 && headerEnd >= 196 {
+				fdstRec = u32(head, 192)
 			}
-			exthAt := 16 + int(headerLen)
-			meta = mergeMeta(meta, parseEXTH(head[exthAt:]))
-			if nameOff := u32(head, 16+84); nameOff > 0 && int(nameOff) < len(head) {
-				nlen := int(u32(head, 16+88))
-				if nlen > 0 && int(nameOff)+nlen <= len(head) && meta.title == "" {
-					meta.title = string(head[nameOff : int(nameOff)+nlen])
+			if headerEnd >= 244 {
+				extra = u32(head, 240)
+			}
+			meta = mergeMeta(meta, parseEXTH(head[headerEnd:]))
+			if headerEnd >= 92 {
+				if nameOff := u32(head, 84); nameOff > 0 && int(nameOff) < len(head) {
+					nlen := int(u32(head, 88))
+					if nlen > 0 && int(nameOff)+nlen <= len(head) && meta.title == "" {
+						meta.title = string(head[nameOff : int(nameOff)+nlen])
+					}
 				}
 			}
 		}
@@ -166,6 +180,20 @@ func readMOBISection(recs [][]byte, rec0 int) (string, mobiMeta, error) {
 	}
 	if textLen > 0 && int(textLen) < len(raw) {
 		raw = raw[:textLen]
+	}
+	// For KF8 files, slice Flow 0 (HTML) via FDST so trailing CSS flows do not leak into body text.
+	if fileVer >= 8 && fdstRec > 0 && fdstRec != 0xFFFFFFFF {
+		idx := rec0 + int(fdstRec)
+		if idx < len(recs) {
+			fd := recs[idx]
+			if len(fd) >= 20 && string(fd[0:4]) == "FDST" {
+				flowStart := int(u32(fd, 12))
+				flowEnd := int(u32(fd, 16))
+				if flowStart >= 0 && flowEnd > flowStart && flowEnd <= len(raw) {
+					raw = raw[flowStart:flowEnd]
+				}
+			}
+		}
 	}
 	text := string(raw)
 	if !utf8.Valid(raw) {
@@ -264,7 +292,7 @@ func latin1(b []byte) string {
 
 func parseEXTH(b []byte) mobiMeta {
 	var meta mobiMeta
-	meta.image, meta.kf8 = -1, -1
+	meta.image, meta.coverOff, meta.kf8 = -1, -1, -1
 	if len(b) < 12 || string(b[:4]) != "EXTH" {
 		return meta
 	}
@@ -296,6 +324,10 @@ func parseEXTH(b []byte) mobiMeta {
 		case 121:
 			if len(val) >= 4 {
 				meta.kf8 = int(binary.BigEndian.Uint32(val[len(val)-4:]))
+			}
+		case 201:
+			if len(val) >= 4 {
+				meta.coverOff = int(binary.BigEndian.Uint32(val[len(val)-4:]))
 			}
 		case 503:
 			meta.title = text
@@ -331,6 +363,9 @@ func mergeMeta(a, b mobiMeta) mobiMeta {
 	}
 	if len(b.tags) > 0 {
 		a.tags = b.tags
+	}
+	if b.coverOff >= 0 {
+		a.coverOff = b.coverOff
 	}
 	if b.kf8 >= 0 {
 		a.kf8 = b.kf8

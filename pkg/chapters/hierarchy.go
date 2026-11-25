@@ -33,10 +33,12 @@ func init() {
 }
 
 type hEntry struct {
-	title string
-	lines []string
-	depth int
-	toc   bool
+	title         string
+	lines         []string
+	depth         int
+	toc           bool
+	customKind    int
+	customSpecial bool
 }
 
 type volInfo struct {
@@ -230,6 +232,9 @@ func chapterTitleCore(line string) (string, bool) {
 					continue
 				}
 			}
+			if looksLikeProseSentence(suffix) {
+				continue
+			}
 			return line, true
 		}
 	}
@@ -239,6 +244,29 @@ func chapterTitleCore(line string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// looksLikeProseSentence rejects short narrative lines that merely start with
+// 第X章/卷 followed by prose punctuation such as 「第一章他说完就走了。」
+// while keeping legitimate punctuated titles like 「第1章 纸灯入水！」 or 「第3章 灯还在吗？」。
+func looksLikeProseSentence(suffix string) bool {
+	s := strings.TrimSpace(suffix)
+	if s == "" {
+		return false
+	}
+	if strings.Contains(s, "。") {
+		return true
+	}
+	// If there is no separator after 第X章 and it contains a comma + sentence closer,
+	// it is almost certainly prose rather than a title.
+	first := []rune(suffix)[0]
+	noSep := first != ' ' && first != '\t' && first != '\u3000' &&
+		first != ':' && first != '：' && first != '-' && first != '—' &&
+		first != '·' && first != '、' && first != '（' && first != '(' && first != '【'
+	if noSep && strings.ContainsAny(s, "，,") && strings.ContainsAny(s, "。！？!?") {
+		return true
+	}
+	return false
 }
 
 func specialSuffix(line, title string) bool {
@@ -605,6 +633,52 @@ func nestByRank(entries []hEntry) []hEntry {
 			entries[i].depth = stack[len(stack)-1].depth + 1
 		}
 		stack = append(stack, open{rank: rank, depth: entries[i].depth})
+	}
+	return entries
+}
+
+func nestCustomEntries(entries []hEntry, hasChapter bool) []hEntry {
+	type open struct {
+		rank  int
+		depth int
+	}
+	var stack []open
+	for i := range entries {
+		e := &entries[i]
+		if e.customKind == 0 {
+			e.depth = 1
+			stack = nil
+			continue
+		}
+		key := titleKey(e.title)
+		if reFanwai.MatchString(key) {
+			e.depth = 1
+			stack = []open{{rank: 2, depth: 1}}
+			continue
+		}
+		if e.customSpecial || rootSpecial.MatchString(key) {
+			e.depth = 1
+			stack = nil
+			continue
+		}
+		rank := 3
+		if e.customKind == 2 && hasChapter {
+			rank = 2
+			if r, ok := markerRank(e.title); ok && r < rank {
+				rank = r
+			}
+		} else if r, ok := markerRank(e.title); ok && r > 3 {
+			rank = r
+		}
+		for len(stack) > 0 && stack[len(stack)-1].rank >= rank {
+			stack = stack[:len(stack)-1]
+		}
+		if len(stack) == 0 {
+			e.depth = 1
+		} else {
+			e.depth = stack[len(stack)-1].depth + 1
+		}
+		stack = append(stack, open{rank: rank, depth: e.depth})
 	}
 	return entries
 }

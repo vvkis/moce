@@ -4,20 +4,20 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cinnabar/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 focus-visible:ring-offset-1 focus-visible:ring-offset-paper-card disabled:pointer-events-none disabled:opacity-45",
   {
     variants: {
       variant: {
-        default: "bg-cinnabar text-paper-card hover:bg-cinnabar-dark",
-        ink: "bg-ink text-paper-card hover:bg-ink-soft",
-        outline: "border border-line bg-paper-card text-ink hover:bg-paper",
-        ghost: "text-ink hover:bg-paper",
+        default: "bg-ink text-white hover:bg-ink-soft shadow-sm",
+        ink: "bg-ink text-white hover:bg-ink-soft shadow-sm",
+        outline: "border border-line bg-white text-ink hover:bg-paper",
+        ghost: "text-muted hover:bg-paper hover:text-ink",
       },
       size: {
-        default: "h-10 px-4",
-        sm: "h-8 px-3 text-xs",
-        lg: "h-11 px-5",
-        icon: "h-9 w-9",
+        default: "h-9 px-3.5",
+        sm: "h-8 px-2.5 text-xs",
+        lg: "h-10 px-4 text-sm",
+        icon: "h-8 w-8",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

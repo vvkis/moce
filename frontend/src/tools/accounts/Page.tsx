@@ -91,24 +91,25 @@ export function AccountsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 p-3 md:p-6">
-      <header>
-        <p className="text-[11px] tracking-[0.22em] text-cinnabar">账号</p>
-        <h1 className="font-serif text-3xl tracking-wide">刮搜登录</h1>
-        <p className="mt-1 text-sm text-muted">登录信息写在这个文件夹的 data\accounts，不上传。默认明文，整夹搬走后仍能用。</p>
+    <div className="mx-auto max-w-3xl space-y-4 p-4 md:p-6">
+      <header className="border-b border-line pb-4">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">刮搜账号</h1>
+        <p className="mt-1 text-xs text-muted">
+          登录信息仅保存在本目录 <code className="rounded bg-paper-deep px-1 py-0.5 font-mono">data\accounts</code>，不会上传。默认明文便于整夹便携迁移。
+        </p>
       </header>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-paper-card px-3 py-2.5 text-xs text-ink">
         <input type="checkbox" checked={mode === "dpapi"} onChange={(e) => void saveMode(e.target.checked ? "dpapi" : "plain")} />
-        仅本机 Windows 用户可解密（换电脑就读不出，便携请保持关闭）
+        仅本机 Windows 用户可解密（DPAPI；换电脑后不可读取，便携请保持关闭）
       </label>
-      {error ? <p className="text-sm text-cinnabar">{error}</p> : null}
-      <ul className="space-y-3">
+      {error ? <p className="rounded-lg border border-red-200 bg-danger-soft px-3 py-2 text-xs text-danger">{error}</p> : null}
+      <ul className="space-y-2.5">
         {rows.map((row) => (
           <li key={row.id} className="rounded-xl border border-line bg-paper-card p-4 shadow-card">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="font-serif text-lg">{row.name}</h2>
-                <p className="text-xs text-muted">{row.status}</p>
+                <h2 className="text-sm font-semibold text-ink">{row.name}</h2>
+                <p className="mt-0.5 text-xs text-muted">{row.status}</p>
               </div>
               <div className="flex gap-2">
                 <Button type="button" size="sm" variant="outline" onClick={() => { setEditing(row); setSecret(""); setQr(""); setError("") }}>
@@ -126,17 +127,22 @@ export function AccountsPage() {
               </div>
             </div>
             {editing?.id === row.id ? (
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 space-y-2 border-t border-line pt-3">
                 {row.id === "weread" ? (
                   <Button type="button" size="sm" onClick={() => void startQR()}>
                     扫码登录
                   </Button>
                 ) : null}
-                {qr && editing.id === "weread" ? <img src={`data:image/png;base64,${qr}`} alt="登录二维码" className="h-48 w-48 border border-line bg-white" /> : null}
+                {qr && editing.id === "weread" ? <img src={`data:image/png;base64,${qr}`} alt="登录二维码" className="h-44 w-44 rounded-lg border border-line bg-white p-1" /> : null}
                 {row.id !== "weread" ? (
                   <>
                     <p className="text-xs leading-5 text-muted">{row.hint}</p>
-                    <textarea aria-label="登录信息" className="min-h-20 w-full rounded-md border border-line bg-[#fffaf3] px-3 py-2 text-sm" value={secret} onChange={(e) => setSecret(e.target.value)} />
+                    <textarea
+                      aria-label="登录信息"
+                      className="min-h-20 w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs text-ink focus-visible:border-ink/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10"
+                      value={secret}
+                      onChange={(e) => setSecret(e.target.value)}
+                    />
                     <Button type="button" size="sm" disabled={busy} onClick={() => void commit()}>
                       {busy ? "正在校验登录…" : "登录"}
                     </Button>

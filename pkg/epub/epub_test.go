@@ -378,3 +378,52 @@ func findEpubcheck() string {
 	}
 	return ""
 }
+
+func TestNCXDepthExactAndTOCLayoutOptions(t *testing.T) {
+	// Default 2-level book should have dtb:depth="2" (not 3).
+	raw, err := Write(sampleBook())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := unzip(t, raw)
+	ncx := string(files["OEBPS/toc.ncx"])
+	if !strings.Contains(ncx, `<meta name="dtb:depth" content="2"/>`) {
+		t.Fatalf("expected depth 2, got:\n%s", ncx)
+	}
+
+	// Divider volume page + inline TOC + hide cover in TOC
+	b := sampleBook()
+	b.VolumePageStyle = "divider"
+	b.InlineTOC = true
+	b.HideCoverInTOC = true
+	raw2, err := Write(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := unzip(t, raw2)
+	if !strings.Contains(string(f2["OEBPS/chapter_001.xhtml"]), `class="vol-divider"`) || !strings.Contains(string(f2["OEBPS/chapter_001.xhtml"]), "共 2 章") {
+		t.Fatalf("missing divider page:\n%s", string(f2["OEBPS/chapter_001.xhtml"]))
+	}
+	if !strings.Contains(string(f2["OEBPS/content.opf"]), `<itemref idref="nav"/>`) {
+		t.Fatalf("inline toc missing from spine:\n%s", string(f2["OEBPS/content.opf"]))
+	}
+	if strings.Contains(string(f2["OEBPS/nav.xhtml"]), "cover.xhtml") || strings.Contains(string(f2["OEBPS/toc.ncx"]), "cover.xhtml") {
+		t.Fatalf("cover should be hidden from TOC")
+	}
+
+	// Skip empty volume page: volume TOC points directly to first child chapter_001.xhtml
+	b3 := sampleBook()
+	b3.VolumePageStyle = "skip"
+	raw3, err := Write(b3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f3 := unzip(t, raw3)
+	if _, ok := f3["OEBPS/chapter_004.xhtml"]; ok {
+		t.Fatalf("expected only 3 chapter files when empty volume is skipped")
+	}
+	if !strings.Contains(string(f3["OEBPS/nav.xhtml"]), `<li><a href="chapter_001.xhtml">第一卷 上游</a><ol><li><a href="chapter_001.xhtml">第一章 纸灯</a>`) {
+		t.Fatalf("skip volume href mismatch:\n%s", string(f3["OEBPS/nav.xhtml"]))
+	}
+	assertReaderControlledCSS(t, string(f3["OEBPS/style.css"]))
+}

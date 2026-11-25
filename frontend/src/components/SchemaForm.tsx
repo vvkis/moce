@@ -33,14 +33,14 @@ function FieldControl({
 }) {
   if (field.type === "bool") {
     return (
-      <label className="flex items-start gap-3 rounded-md border border-line bg-paper/60 px-3 py-2 sm:col-span-2">
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line bg-paper/50 px-3 py-2.5 hover:bg-paper sm:col-span-2">
         <Checkbox
           className="mt-0.5"
           checked={value === true}
           onCheckedChange={(checked) => onChange(field.key, checked === true)}
         />
         <span>
-          <span className="block text-sm font-medium">{field.label}</span>
+          <span className="block text-sm font-medium text-ink">{field.label}</span>
           {field.help ? <span className="mt-0.5 block text-xs leading-5 text-muted">{field.help}</span> : null}
         </span>
       </label>
@@ -51,11 +51,13 @@ function FieldControl({
   return (
     <div className={cn("space-y-1.5", wide && "sm:col-span-2")}>
       <div className="flex items-center justify-between gap-3">
-        <Label htmlFor={field.key}>{field.label}</Label>
+        <Label htmlFor={field.key} className="text-xs font-medium text-ink">
+          {field.label}
+        </Label>
         {field.default !== undefined && value !== field.default ? (
           <button
             type="button"
-            className="text-xs text-cinnabar hover:underline"
+            className="text-xs text-accent hover:underline"
             onClick={() => onChange(field.key, field.default)}
           >
             恢复默认
@@ -67,14 +69,14 @@ function FieldControl({
           id={field.key}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(field.key, e.target.value)}
-          className="min-h-16 w-full rounded-md border border-line bg-[#fffaf3] px-3 py-2 font-mono text-xs leading-5 text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cinnabar/30"
+          className="min-h-16 w-full rounded-lg border border-line bg-white px-3 py-2 font-mono text-xs leading-5 text-ink focus-visible:border-ink/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10"
         />
       ) : field.type === "select" ? (
         <select
           id={field.key}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(field.key, e.target.value)}
-          className="h-9 w-full rounded-md border border-line bg-paper-card px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink focus-visible:border-ink/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10"
         >
           {field.options?.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -99,7 +101,7 @@ function FieldControl({
           onChange={(e) => onChange(field.key, e.target.value)}
         />
       )}
-      {field.help ? <p className="text-xs leading-5 text-muted">{field.help}</p> : null}
+      {field.help ? <p className="text-[11px] leading-4 text-muted">{field.help}</p> : null}
     </div>
   )
 }

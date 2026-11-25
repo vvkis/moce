@@ -63,7 +63,7 @@ func TestRuntimeSourcesAvoidOSDefaults(t *testing.T) {
 	root := moduleRoot(t)
 	var hits []string
 	skipDir := map[string]bool{
-		".cache": true, ".git": true, "node_modules": true, "dist": true, "build": true, "frontend/dist": true,
+		".cache": true, ".toolchain": true, ".git": true, "node_modules": true, "dist": true, "build": true, "frontend/dist": true,
 	}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {

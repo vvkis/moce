@@ -43,6 +43,31 @@ func TestEPUBSpineAndNav(t *testing.T) {
 	}
 }
 
+func TestEPUBSkipsNavInSpine(t *testing.T) {
+	buf := &bytes.Buffer{}
+	zw := zip.NewWriter(buf)
+	write := func(name, body string) {
+		w, _ := zw.Create(name)
+		_, _ = w.Write([]byte(body))
+	}
+	write("META-INF/container.xml", `<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`)
+	write("OEBPS/content.opf", `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>河灯</dc:title><dc:creator>沈小满</dc:creator></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="cover"/><itemref idref="nav"/><itemref idref="c1"/></spine></package>`)
+	write("OEBPS/cover.xhtml", `<html><body><h1>河灯</h1><p>沈小满</p></body></html>`)
+	write("OEBPS/nav.xhtml", `<html><body><nav><ol><li><a href="c1.xhtml">旧目录条目</a></li></ol></nav></body></html>`)
+	write("OEBPS/c1.xhtml", `<html><body><h1>第一章 纸灯</h1><p>正文在这里。</p></body></html>`)
+	_ = zw.Close()
+	book, err := Open("河灯.epub", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(book.Text, "旧目录条目") {
+		t.Fatalf("nav text leaked into body: %s", book.Text)
+	}
+	if !strings.Contains(book.Text, "正文在这里。") {
+		t.Fatalf("body missing: %s", book.Text)
+	}
+}
+
 func TestPalmDocMOBI(t *testing.T) {
 	html := "<h1>第一章 纸灯</h1><p>他把灯放进河里。</p>"
 	raw := palmWrap("河灯", html)

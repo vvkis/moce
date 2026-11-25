@@ -603,4 +603,80 @@ func TestSampleNovelNests(t *testing.T) {
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
+	if res.VolumeCount != 7 {
+		// 第一部、第一卷、第一章(有第一节)、第二卷、第二部、第一卷、番外 -> 7 branch nodes
+		t.Fatalf("expected 7 branch nodes, got %d", res.VolumeCount)
+	}
+}
+
+func TestShortProseNotHeading(t *testing.T) {
+	for _, line := range []string{
+		"第一章他说完就走了。",
+		"第一卷的封面已经发黄了。",
+		"第3章讲了一个故事，后来结束了！",
+	} {
+		if _, ok := chapterTitle(line); ok {
+			t.Fatalf("prose sentence should not be a heading: %s", line)
+		}
+	}
+}
+
+func TestCustomRegexKeepsHierarchyAndTocFolding(t *testing.T) {
+	text := strings.Join([]string{
+		"卷一 起源",
+		"001 开始",
+		"　　正文一。",
+		"002 假目录一",
+		"003 假目录二",
+		"004 假目录三",
+		"005 真正的第二章",
+		"　　正文二。",
+		"番外 尾声",
+		"006 番外一",
+		"　　番外正文。",
+	}, "\n")
+	opt := opts()
+	opt.ChapterPattern = `[0-9]{3}\s+.*`
+	opt.VolumePattern = `卷[一二三四五六七八九十0-9]+.*`
+	res, err := Split(text, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(titles(res.Nodes), "\n")
+	want := strings.Join([]string{
+		"卷一 起源",
+		"  001 开始",
+		"  005 真正的第二章",
+		"番外 尾声",
+		"  006 番外一",
+	}, "\n")
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestApplyEditsRenameMergeAndLevel(t *testing.T) {
+	text := "第一卷 上游\n第一章 纸灯\n　　正文甲。\n第二章 误判\n　　误判正文。\n第三章 码头\n　　正文丙。\n"
+	res, err := Split(text, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Flatten indices: 0=第一卷 上游, 1=第一章 纸灯, 2=第二章 误判, 3=第三章 码头
+	edited := ApplyEdits(res, []Edit{
+		{Index: 0, Title: "卷一·上游"},
+		{Index: 2, Merge: true},
+		{Index: 3, Delta: -1}, // promote to top-level
+	})
+	got := strings.Join(titles(edited.Nodes), "\n")
+	want := "卷一·上游\n  第一章 纸灯\n第三章 码头"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	ch1 := strings.Join(edited.Nodes[0].Children[0].Paragraphs, "|")
+	if !strings.Contains(ch1, "第二章 误判") || !strings.Contains(ch1, "误判正文。") {
+		t.Fatalf("merged content lost: %s", ch1)
+	}
+	if edited.Entries[1].Runes == 0 {
+		t.Fatalf("expected non-zero runes on chapter entry: %+v", edited.Entries[1])
+	}
 }

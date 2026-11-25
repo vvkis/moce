@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"moce/internal/toolhost"
+	"moce/pkg/azw3"
 	"moce/pkg/chapters"
 	"moce/pkg/coverimg"
 	"moce/pkg/encoding"
@@ -44,8 +45,12 @@ func New() *Tool { return &Tool{} }
 
 // Options are the shared conversion settings.
 type Options struct {
+	OutputFormat     string  `json:"outputFormat"`
 	ChapterPattern   string  `json:"chapterPattern"`
 	VolumePattern    string  `json:"volumePattern"`
+	VolumePageStyle  string  `json:"volumePageStyle"`
+	InlineTOC        bool    `json:"inlineToc"`
+	HideCoverInTOC   bool    `json:"hideCoverInToc"`
 	MergeBrokenLines bool    `json:"mergeBrokenLines"`
 	DropEmptyLines   bool    `json:"dropEmptyLines"`
 	BaseFontSize     int     `json:"baseFontSize"`
@@ -81,43 +86,47 @@ type ProbeResult struct {
 	Format       string           `json:"format,omitempty"`
 }
 
-// ConvertResult is a finished EPUB.
+// ConvertResult is a finished ebook (EPUB or AZW3).
 type ConvertResult struct {
-	Path         string `json:"path,omitempty"`
-	Filename     string `json:"filename"`
-	Bytes        int    `json:"bytes"`
-	DataBase64   string `json:"dataBase64,omitempty"`
-	ChapterCount int    `json:"chapterCount"`
+	Path         string   `json:"path,omitempty"`
+	ExtraPaths   []string `json:"extraPaths,omitempty"`
+	Filename     string   `json:"filename"`
+	Format       string   `json:"format,omitempty"`
+	Bytes        int      `json:"bytes"`
+	DataBase64   string   `json:"dataBase64,omitempty"`
+	ChapterCount int      `json:"chapterCount"`
 }
 
 type fileIn struct {
-	Name          string  `json:"name"`
-	Path          string  `json:"path"`
-	DataBase64    string  `json:"dataBase64"`
-	Title         string  `json:"title"`
-	TitleEdited   bool    `json:"titleEdited"`
-	Author        string  `json:"author"`
-	AuthorEdited  bool    `json:"authorEdited"`
-	Series        string  `json:"series"`
-	SeriesIndex   string  `json:"seriesIndex"`
-	Tags          string  `json:"tags"`
-	Publisher     string  `json:"publisher"`
-	Language      string  `json:"language"`
-	Published     string  `json:"published"`
-	Identifier    string  `json:"identifier"`
-	Intro         string  `json:"intro"`
-	Rating        int     `json:"rating"`
-	GenerateCover bool    `json:"generateCover"`
-	Encoding      string  `json:"encoding"`
-	CoverPath     string  `json:"coverPath"`
-	CoverBase64   string  `json:"coverBase64"`
-	CoverName     string  `json:"coverName"`
-	FontPath      string  `json:"fontPath"`
-	FontBase64    string  `json:"fontBase64"`
-	FontName      string  `json:"fontName"`
-	OutputDir     string  `json:"outputDir"`
-	ReturnBytes   bool    `json:"returnBytes"`
-	Options       Options `json:"options"`
+	Name          string          `json:"name"`
+	Path          string          `json:"path"`
+	DataBase64    string          `json:"dataBase64"`
+	Title         string          `json:"title"`
+	TitleEdited   bool            `json:"titleEdited"`
+	Author        string          `json:"author"`
+	AuthorEdited  bool            `json:"authorEdited"`
+	Series        string          `json:"series"`
+	SeriesIndex   string          `json:"seriesIndex"`
+	Tags          string          `json:"tags"`
+	Publisher     string          `json:"publisher"`
+	Language      string          `json:"language"`
+	Published     string          `json:"published"`
+	Identifier    string          `json:"identifier"`
+	Intro         string          `json:"intro"`
+	Rating        int             `json:"rating"`
+	GenerateCover bool            `json:"generateCover"`
+	Encoding      string          `json:"encoding"`
+	CoverPath     string          `json:"coverPath"`
+	CoverBase64   string          `json:"coverBase64"`
+	CoverName     string          `json:"coverName"`
+	FontPath      string          `json:"fontPath"`
+	FontBase64    string          `json:"fontBase64"`
+	FontName      string          `json:"fontName"`
+	OutputDir     string          `json:"outputDir"`
+	OutputFormat  string          `json:"outputFormat,omitempty"`
+	TOCEdits      []chapters.Edit `json:"tocEdits,omitempty"`
+	ReturnBytes   bool            `json:"returnBytes"`
+	Options       Options         `json:"options"`
 }
 
 // Meta describes the tool for the shell.
@@ -125,12 +134,32 @@ func (t *Tool) Meta() toolhost.Meta {
 	num := func(v float64) *float64 { return &v }
 	return toolhost.Meta{
 		ID:          "txt2epub",
-		Name:        "TXT 转 EPUB",
-		Description: "把中文 TXT 小说做成适合 KOReader 的 EPUB",
+		Name:        "电子书重排",
+		Description: "把 TXT、EPUB、MOBI、AZW3 重新排成适合 KOReader 与 Kindle 的 EPUB / AZW3",
 		Panel:       "txt2epub",
 		Schema: []toolhost.Field{
+			{
+				Key: "outputFormat", Label: "输出格式", Type: "select", Default: "epub",
+				Help: "EPUB 适合 KOReader 与大多数阅读器；AZW3（KF8）适合 Kindle 原生系统；也可同时输出两种格式。",
+				Options: []toolhost.Option{
+					{Value: "epub", Label: "EPUB"},
+					{Value: "azw3", Label: "AZW3（Kindle KF8）"},
+					{Value: "both", Label: "同时生成 EPUB + AZW3"},
+				},
+			},
+			{
+				Key: "volumePageStyle", Label: "空分卷页样式", Type: "select", Default: "classic",
+				Help: "仅作用于没有正文的分卷/分部标题页。",
+				Options: []toolhost.Option{
+					{Value: "classic", Label: "常规标题页（与 moon 一致）"},
+					{Value: "divider", Label: "中式分卷扉页（居中 + 章节数）"},
+					{Value: "skip", Label: "不单独成页（目录直跳该卷首章）"},
+				},
+			},
 			{Key: "chapterPattern", Label: "章节正则", Type: "textarea", Default: chapters.DefaultChapterPattern, Help: "匹配一行的开头，使用 RE2 语法。默认识别「第1章」「第一章」「序章」「楔子」「番外」「尾声」「后记」。"},
 			{Key: "volumePattern", Label: "分卷正则", Type: "textarea", Default: chapters.DefaultVolumePattern, Help: "识别「第一卷」「第一部」。同一本书里还有章节时，会做成二级目录。"},
+			{Key: "inlineToc", Label: "生成书内目录页", Type: "bool", Default: false, Help: "在封面之后插入可点击的书内目录页（不影响系统目录树）。"},
+			{Key: "hideCoverInToc", Label: "目录中隐藏「封面」项", Type: "bool", Default: false, Help: "阅读器目录树不再在最前面添加「封面」条目。"},
 			{Key: "mergeBrokenLines", Label: "合并断行", Type: "bool", Default: true, Help: "把被折断的句子接回同一段。行首缩进或空行表示新的一段。"},
 			{Key: "dropEmptyLines", Label: "去掉空行", Type: "bool", Default: true, Help: "空行不写进正文。"},
 			{Key: "baseFontSize", Label: "正文字号（点）", Type: "number", Default: 0, Min: num(0), Max: num(36), Step: num(1), Help: "0 表示跟随阅读器。填了则按 12 点为基准写成 em，不用 px，阅读器仍可调字号。"},
@@ -303,6 +332,9 @@ func (t *Tool) probe(in fileIn) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, err
 	}
+	if len(in.TOCEdits) > 0 {
+		split = chapters.ApplyEdits(split, in.TOCEdits)
+	}
 	warning := ""
 	if split.Fallback {
 		warning = fmt.Sprintf("未识别到章节标题，已按约 %d 字分段。可以改章节正则后再识别。", opt.FallbackRunes)
@@ -400,6 +432,9 @@ func (t *Tool) convert(in fileIn) (ConvertResult, error) {
 	if err != nil {
 		return ConvertResult{}, err
 	}
+	if len(in.TOCEdits) > 0 {
+		split = chapters.ApplyEdits(split, in.TOCEdits)
+	}
 	var cover []byte
 	var coverName, coverMIME string
 	if !in.GenerateCover {
@@ -448,20 +483,24 @@ func (t *Tool) convert(in fileIn) (ConvertResult, error) {
 			ParagraphEm:   opt.ParagraphEm,
 			IndentEm:      opt.IndentEm,
 		},
-		Cover:      cover,
-		CoverName:  coverName,
-		CoverMIME:  coverMIME,
-		Font:       font,
-		FontExt:    fontExt,
-		FontMIME:   fontMIME,
-		FontFormat: fontFormat,
+		Cover:           cover,
+		CoverName:       coverName,
+		CoverMIME:       coverMIME,
+		Font:            font,
+		FontExt:         fontExt,
+		FontMIME:        fontMIME,
+		FontFormat:      fontFormat,
+		VolumePageStyle: opt.VolumePageStyle,
+		InlineTOC:       opt.InlineTOC,
+		HideCoverInTOC:  opt.HideCoverInTOC,
 	}
-	data, err := epub.Write(book)
-	if err != nil {
-		return ConvertResult{}, err
+
+	targetFmt := resolveOutputFormat(in.OutputFormat, opt.OutputFormat)
+	targets := []string{targetFmt}
+	if targetFmt == "both" {
+		targets = []string{"epub", "azw3"}
 	}
-	filename := sanitizeFilename(title) + ".epub"
-	out := ConvertResult{Filename: filename, Bytes: len(data), ChapterCount: split.ChapterCount}
+
 	outDir := trim(in.OutputDir)
 	if outDir == "" && in.Path != "" {
 		outDir = filepath.Dir(in.Path)
@@ -473,19 +512,84 @@ func (t *Tool) convert(in fileIn) (ConvertResult, error) {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			return ConvertResult{}, fmt.Errorf("无法创建输出目录")
 		}
-		outPath := filepath.Join(outDir, filename)
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
-			return ConvertResult{}, fmt.Errorf("无法写入 EPUB")
-		}
-		out.Path = outPath
 	}
-	if in.ReturnBytes || out.Path == "" {
-		out.DataBase64 = base64.StdEncoding.EncodeToString(data)
+
+	baseName := sanitizeFilename(title)
+	var out ConvertResult
+	out.ChapterCount = split.ChapterCount
+	for idx, kind := range targets {
+		var data []byte
+		var ext, label string
+		switch kind {
+		case "azw3":
+			data, err = azw3.Write(book)
+			ext, label = ".azw3", "AZW3"
+		default:
+			data, err = epub.Write(book)
+			ext, label = ".epub", "EPUB"
+		}
+		if err != nil {
+			return ConvertResult{}, err
+		}
+		filename := baseName + ext
+		var writtenPath string
+		if outDir != "" {
+			writtenPath = filepath.Join(outDir, filename)
+			if in.Path != "" && sameFilePath(writtenPath, in.Path) {
+				filename = baseName + "-墨册" + ext
+				writtenPath = filepath.Join(outDir, filename)
+			}
+			if err := os.WriteFile(writtenPath, data, 0o644); err != nil {
+				return ConvertResult{}, fmt.Errorf("无法写入 %s", label)
+			}
+		}
+		if idx == 0 {
+			out.Filename = filename
+			out.Format = label
+			out.Bytes = len(data)
+			out.Path = writtenPath
+			if in.ReturnBytes || out.Path == "" {
+				out.DataBase64 = base64.StdEncoding.EncodeToString(data)
+			}
+		} else if writtenPath != "" {
+			out.ExtraPaths = append(out.ExtraPaths, writtenPath)
+		}
 	}
 	return out, nil
 }
 
+func sameFilePath(a, b string) bool {
+	ca, errA := filepath.Abs(a)
+	cb, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return strings.EqualFold(filepath.Clean(ca), filepath.Clean(cb))
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func resolveOutputFormat(explicit, optFmt string) string {
+	v := strings.ToLower(trim(explicit))
+	if v == "" {
+		v = strings.ToLower(trim(optFmt))
+	}
+	switch v {
+	case "azw3", "both":
+		return v
+	default:
+		return "epub"
+	}
+}
+
 func normalize(o Options) (Options, error) {
+	o.OutputFormat = resolveOutputFormat(o.OutputFormat, "")
+	switch strings.ToLower(trim(o.VolumePageStyle)) {
+	case "", "classic":
+		o.VolumePageStyle = ""
+	case "divider", "skip":
+		o.VolumePageStyle = strings.ToLower(trim(o.VolumePageStyle))
+	default:
+		return o, errors.New("分卷页样式仅支持 classic、divider 或 skip")
+	}
 	if strings.TrimSpace(o.ChapterPattern) == "" {
 		o.ChapterPattern = chapters.DefaultChapterPattern
 	}

@@ -10,7 +10,7 @@ import { panels } from "@/tools/registry"
 import { AccountsPage } from "@/tools/accounts/Page"
 import { ProgressPage, type ProgressJob } from "@/tools/progress/Page"
 
-type DoneItem = { title: string; path?: string; error: string }
+type DoneItem = { title: string; format?: string; path?: string; error: string }
 
 export default function App() {
   const [tools, setTools] = useState<ToolMeta[]>([])
@@ -50,6 +50,7 @@ export default function App() {
             setReport(
               mine.map((job) => ({
                 title: job.title || job.name,
+                format: job.outputFormat || "EPUB",
                 path: job.outputPath,
                 error: job.status === "done" ? "" : job.error || job.step,
               })),
@@ -89,10 +90,10 @@ export default function App() {
           onAccounts={() => setPage("accounts")}
         />
         <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-          {loading ? <p className="p-8 text-sm text-muted">正在打开书架…</p> : null}
+          {loading ? <p className="p-8 text-sm text-muted">正在加载工作区…</p> : null}
           {!loading && error ? (
             <div className="p-8">
-              <p className="text-sm text-cinnabar">{error}</p>
+              <p className="text-sm text-danger">{error}</p>
               <Button className="mt-4" variant="outline" onClick={load}>
                 重试
               </Button>
@@ -112,28 +113,54 @@ export default function App() {
 function DonePanel({ items, onClose, onProgress }: { items: DoneItem[]; onClose: () => void; onProgress: () => void }) {
   const ok = items.filter((item) => !item.error)
   const bad = items.filter((item) => item.error)
-  const headline = items.length === 1 && bad.length === 0 ? `《${items[0].title}》已生成` : `${ok.length} 本已完成，${bad.length} 本失败`
+  const headline =
+    items.length === 1 && bad.length === 0
+      ? `《${items[0].title}》(${items[0].format || "EPUB"}) 已生成`
+      : `${ok.length} 个文件已完成${bad.length > 0 ? `，${bad.length} 个失败` : ""}`
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center p-3 sm:p-6">
-      <div className="w-full max-w-lg rounded-xl border border-cinnabar/30 bg-paper-card p-4 shadow-card">
+    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center p-3 sm:p-5">
+      <div className="w-full max-w-lg rounded-xl border border-line bg-white p-4 shadow-lg ring-1 ring-black/5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="font-serif text-2xl">排版完成</h2>
-            <p className="mt-1 text-sm">{headline}</p>
+            <h2 className="text-base font-semibold text-ink">排版完成</h2>
+            <p className="mt-0.5 text-xs text-muted">{headline}</p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={onClose}>
             关闭
           </Button>
         </div>
+        {ok.length > 1 && isDesktop() ? (
+          <ul className="mt-3 space-y-1.5 border-t border-line pt-2.5">
+            {ok.map((item, i) => (
+              <li key={`${item.title}-${item.format}-${i}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="min-w-0 truncate text-ink">
+                  <span className="mr-1.5 rounded bg-paper-deep px-1.5 py-0.5 font-mono text-[10px] font-medium">{item.format || "EPUB"}</span>
+                  {item.title}
+                </span>
+                {item.path ? (
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      type="button"
+                      className="text-accent hover:underline"
+                      onClick={() => void window.go?.main.App.RevealPath(item.path!)}
+                    >
+                      文件夹
+                    </button>
+                    <button
+                      type="button"
+                      className="text-ink hover:underline"
+                      onClick={() => void window.go?.main.App.OpenPath(item.path!)}
+                    >
+                      打开
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              onProgress()
-            }}
-          >
+          <Button type="button" size="sm" variant="outline" onClick={onProgress}>
             查看进度
           </Button>
           {ok.length === 1 && ok[0].path && isDesktop() ? (
@@ -148,7 +175,7 @@ function DonePanel({ items, onClose, onProgress }: { items: DoneItem[]; onClose:
           ) : null}
         </div>
         {bad.length > 0 ? (
-          <ul className="mt-3 space-y-1 text-sm text-cinnabar">
+          <ul className="mt-3 space-y-1 text-xs text-danger">
             {bad.map((item) => (
               <li key={item.title + item.error}>《{item.title}》{item.error}</li>
             ))}

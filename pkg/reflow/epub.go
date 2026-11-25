@@ -132,12 +132,18 @@ func parseOPF(data []byte, dir string, files map[string]*zip.File) (Book, error)
 				IDRef string `xml:"idref,attr"`
 			} `xml:"itemref"`
 		} `xml:"spine"`
+		Guide struct {
+			Refs []struct {
+				Type string `xml:"type,attr"`
+				Href string `xml:"href,attr"`
+			} `xml:"reference"`
+		} `xml:"guide"`
 	}
 	if err := xml.Unmarshal(data, &opf); err != nil {
 		return Book{}, fmt.Errorf("无法读取 EPUB")
 	}
 	byID := map[string]string{}
-	var navHref, ncxHref, coverHref, coverName string
+	var navHref, ncxHref, coverHref, coverName, coverPageHref string
 	for _, item := range opf.Manifest.Items {
 		href := path.Join(dir, item.Href)
 		byID[item.ID] = href
@@ -149,6 +155,20 @@ func parseOPF(data []byte, dir string, files map[string]*zip.File) (Book, error)
 		}
 		if strings.Contains(item.Properties, "cover-image") {
 			coverHref, coverName = href, path.Base(item.Href)
+		}
+		if strings.EqualFold(item.ID, "cover") && strings.Contains(item.MediaType, "html") {
+			coverPageHref = href
+		}
+	}
+	for _, ref := range opf.Guide.Refs {
+		if strings.EqualFold(ref.Type, "cover") && ref.Href != "" {
+			clean := ref.Href
+			if i := strings.IndexByte(clean, '#'); i >= 0 {
+				clean = clean[:i]
+			}
+			if clean != "" {
+				coverPageHref = path.Join(dir, clean)
+			}
 		}
 	}
 	for _, m := range opf.Metadata.Meta {
@@ -164,12 +184,18 @@ func parseOPF(data []byte, dir string, files map[string]*zip.File) (Book, error)
 		if href == "" {
 			continue
 		}
+		if navHref != "" && href == navHref {
+			continue
+		}
 		body, err := readZip(files, href)
 		if err != nil {
 			continue
 		}
 		chunk := HTMLToText(string(body))
 		if chunk == "" {
+			continue
+		}
+		if coverPageHref != "" && href == coverPageHref && isPureCoverText(chunk, first(opf.Metadata.Titles), first(opf.Metadata.Creators)) {
 			continue
 		}
 		if text.Len() > 0 {
@@ -210,6 +236,27 @@ func parseOPF(data []byte, dir string, files map[string]*zip.File) (Book, error)
 		}
 	}
 	return out, nil
+}
+
+func isPureCoverText(chunk, title, author string) bool {
+	lines := strings.Split(chunk, "\n")
+	if len(lines) > 6 {
+		return false
+	}
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" || t == "封面" || t == "墨册" {
+			continue
+		}
+		if title != "" && (t == title || t == "《"+title+"》") {
+			continue
+		}
+		if author != "" && (t == author || strings.Contains(t, author) && len([]rune(t)) <= len([]rune(author))+6) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func first(v []string) string {

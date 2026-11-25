@@ -1,10 +1,17 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { ProbeEntry } from "../../lib/types"
-import { collectBranchIds, groupToc, visibleToc } from "./toc.ts"
+import {
+  collectBranchIds,
+  countAnomalies,
+  entryAnomaly,
+  filterToc,
+  groupToc,
+  visibleToc,
+} from "./toc.ts"
 
-function entry(title: string, level: number): ProbeEntry {
-  return { title, level, kind: level === 1 ? "chapter" : "chapter", paragraphs: 1, snippet: "" }
+function entry(title: string, level: number, runes = 1200): ProbeEntry {
+  return { title, level, kind: "chapter", paragraphs: 1, runes, snippet: "" }
 }
 
 test("flat book stays a list", () => {
@@ -20,10 +27,10 @@ test("flat book stays a list", () => {
 test("two levels: volume and 番外 parent their chapters", () => {
   const tree = groupToc([
     entry("楔子", 1),
-    entry("第一卷 上游", 1),
+    entry("第一卷 上游", 1, 0),
     entry("第一章 纸灯", 2),
     entry("第二章 旧码头", 2),
-    entry("番外 灯芯", 1),
+    entry("番外 灯芯", 1, 0),
     entry("第一章 余温", 2),
     entry("后记", 1),
   ])
@@ -32,10 +39,12 @@ test("two levels: volume and 番外 parent their chapters", () => {
     ["楔子", "第一卷 上游", "番外 灯芯", "后记"],
   )
   assert.equal(tree[0].children.length, 0)
+  assert.equal(tree[1].leafCount, 2)
   assert.deepEqual(
     tree[1].children.map((node) => node.entry.title),
     ["第一章 纸灯", "第二章 旧码头"],
   )
+  assert.equal(tree[2].leafCount, 1)
   assert.deepEqual(
     tree[2].children.map((node) => node.entry.title),
     ["第一章 余温"],
@@ -104,4 +113,43 @@ test("a thousand siblings stay flat and group quickly", () => {
   assert.ok(Date.now() - started < 500)
   assert.equal(tree.length, 1200)
   assert.equal(collectBranchIds(tree).length, 0)
+})
+
+test("edits rename, merge, and adjust levels while keeping original indices", () => {
+  const entries = [
+    entry("第一卷 上游", 1, 0),
+    entry("第一章 纸灯", 2, 1000),
+    entry("误判标题", 2, 15),
+    entry("第二章 码头", 2, 2500),
+  ]
+  const tree = groupToc(entries, {
+    0: { index: 0, title: "卷一·上游" },
+    2: { index: 2, merge: true },
+    3: { index: 3, level: 1 },
+  })
+  assert.equal(tree.length, 2)
+  assert.equal(tree[0].entry.title, "卷一·上游")
+  assert.equal(tree[0].children.length, 1)
+  assert.equal(tree[0].children[0].entry.title, "第一章 纸灯")
+  assert.ok((tree[0].children[0].entry.runes ?? 0) > 1015)
+  assert.equal(tree[1].entry.title, "第二章 码头")
+  assert.equal(tree[1].index, 3)
+})
+
+test("anomalies and filtering keep ancestor branches", () => {
+  const entries = [
+    entry("第一卷 上游", 1, 0),
+    entry("第一章 正常", 2, 2000),
+    entry("第404章 跳过", 2, 10),
+    entry("第500章 漏分章", 2, 25000),
+  ]
+  const tree = groupToc(entries)
+  assert.equal(entryAnomaly(tree[0]), null) // volume with 0 runes is normal
+  assert.equal(countAnomalies(tree), 2)
+  const filtered = filterToc(tree, "", true)
+  assert.equal(filtered.length, 1)
+  assert.deepEqual(
+    filtered[0].children.map((n) => n.entry.title),
+    ["第404章 跳过", "第500章 漏分章"],
+  )
 })

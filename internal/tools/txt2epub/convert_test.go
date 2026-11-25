@@ -14,6 +14,9 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
+
+	"moce/pkg/chapters"
+	"moce/pkg/reflow"
 )
 
 func fullOptions() Options {
@@ -269,6 +272,104 @@ func TestFilenameAuthor(t *testing.T) {
 	}
 	if got := sanitizeFilename(`a/b:c*?.txt`); strings.ContainsAny(got, `/\:*?`) {
 		t.Fatal(got)
+	}
+}
+
+func TestConvertAZW3AndBothAndTOCEdits(t *testing.T) {
+	text := "第一卷 上游\n第一章 纸灯\n　　他把灯放进河里。\n第二章 误判\n　　误判行。\n第三章 码头\n　　码头上没有人。\n"
+	dir := t.TempDir()
+	src := filepath.Join(dir, "河灯.txt")
+	if err := os.WriteFile(src, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opt := fullOptions()
+	opt.OutputFormat = "both"
+	opt.VolumePageStyle = "divider"
+	opt.InlineTOC = true
+	opt.HideCoverInTOC = true
+
+	tool := New()
+	resAny, err := tool.Call("convert", mustJSON(fileIn{
+		Name:      "河灯.txt",
+		Path:      src,
+		Title:     "河灯",
+		Author:    "沈小满",
+		OutputDir: dir,
+		Options:   opt,
+		TOCEdits: []chapters.Edit{
+			{Index: 0, Title: "卷一·上游"},
+			{Index: 2, Merge: true},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resAny.(ConvertResult)
+	if !strings.HasSuffix(res.Path, ".epub") || len(res.ExtraPaths) != 1 || !strings.HasSuffix(res.ExtraPaths[0], ".azw3") {
+		t.Fatalf("unexpected outputs: %+v", res)
+	}
+
+	// Verify EPUB got TOC edits & layout options.
+	epubBytes, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := unzip(t, epubBytes)
+	nav := string(files["OEBPS/nav.xhtml"])
+	if !strings.Contains(nav, "卷一·上游") || strings.Contains(nav, "第二章 误判") || strings.Contains(nav, "封面") {
+		t.Fatalf("EPUB nav mismatch:\n%s", nav)
+	}
+
+	// Verify AZW3 file is valid KF8 and readable back via reflow.Open.
+	azwBytes, err := os.ReadFile(res.ExtraPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(azwBytes) < 100 || string(azwBytes[60:68]) != "BOOKMOBI" {
+		t.Fatalf("invalid AZW3 magic")
+	}
+	reopened, err := reflow.Open("河灯.azw3", azwBytes)
+	if err != nil {
+		t.Fatalf("reflow.Open AZW3 failed: %v", err)
+	}
+	if !strings.Contains(reopened.Text, "卷一·上游") || !strings.Contains(reopened.Text, "误判行。") {
+		t.Fatalf("AZW3 body mismatch:\n%s", reopened.Text)
+	}
+}
+
+func TestNativeEPUBToReflowEPUBAndAZW3NoOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "河灯.epub")
+	if err := os.WriteFile(src, hedengEPUB(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origCopy := append([]byte(nil), hedengEPUB()...)
+
+	opt := fullOptions()
+	opt.OutputFormat = "both"
+	resAny, err := New().Call("convert", mustJSON(fileIn{
+		Name:    "河灯.epub",
+		Path:    src,
+		Title:   "河灯",
+		Options: opt,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resAny.(ConvertResult)
+	if res.Path == src || !strings.HasSuffix(res.Path, "河灯-墨册.epub") {
+		t.Fatalf("source EPUB should not be overwritten, got path %q", res.Path)
+	}
+	if len(res.ExtraPaths) != 1 || !strings.HasSuffix(res.ExtraPaths[0], "河灯.azw3") {
+		t.Fatalf("expected companion AZW3 output, got %+v", res.ExtraPaths)
+	}
+	afterSrc, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterSrc, origCopy) {
+		t.Fatal("original EPUB bytes changed")
 	}
 }
 

@@ -72,11 +72,18 @@ type Book struct {
 	FontExt    string
 	FontMIME   string
 	FontFormat string
+	// TOC and volume layout options (zero values preserve legacy moon defaults):
+	// VolumePageStyle: "" or "classic" (h1 only), "divider" (中式分卷扉页), "skip" (空卷不单独成页，目录直指首章).
+	VolumePageStyle string
+	InlineTOC       bool // insert nav.xhtml into spine after cover
+	HideCoverInTOC  bool // omit "封面" entry from nav.xhtml and toc.ncx
 }
 
 type doc struct {
 	id, href, title string
 	paragraphs      []string
+	divider         bool
+	childCount      int
 }
 
 type tocNode struct {
@@ -104,7 +111,7 @@ func Write(book Book) ([]byte, error) {
 	} else {
 		book.Modified = book.Modified.UTC()
 	}
-	docs, toc, err := prepare(book.Chapters)
+	docs, toc, err := prepare(book.Chapters, book.VolumePageStyle)
 	if err != nil {
 		return nil, err
 	}
@@ -144,11 +151,17 @@ func Write(book Book) ([]byte, error) {
 		ZipFile{Name: "OEBPS/style.css", Data: []byte(css)},
 		ZipFile{Name: "OEBPS/" + book.CoverName, Data: book.Cover},
 		ZipFile{Name: "OEBPS/cover.xhtml", Data: []byte(coverXHTML(book, textCover))},
-		ZipFile{Name: "OEBPS/nav.xhtml", Data: []byte(navXHTML(book.Title, toc))},
-		ZipFile{Name: "OEBPS/toc.ncx", Data: []byte(ncxXML(book.Title, book.Author, uid, toc))},
+		ZipFile{Name: "OEBPS/nav.xhtml", Data: []byte(navXHTML(book.Title, toc, !book.HideCoverInTOC))},
+		ZipFile{Name: "OEBPS/toc.ncx", Data: []byte(ncxXML(book.Title, book.Author, uid, toc, !book.HideCoverInTOC))},
 	)
 	for _, d := range docs {
-		oebps = append(oebps, ZipFile{Name: "OEBPS/" + d.href, Data: []byte(chapterXHTML(d.title, d.paragraphs, book.Style))})
+		var html string
+		if d.divider {
+			html = volumeDividerXHTML(d.title, d.childCount, book.Style)
+		} else {
+			html = chapterXHTML(d.title, d.paragraphs, book.Style)
+		}
+		oebps = append(oebps, ZipFile{Name: "OEBPS/" + d.href, Data: []byte(html)})
 	}
 	if len(book.Font) > 0 {
 		oebps = append(oebps, ZipFile{Name: "OEBPS/fonts/embedded" + book.FontExt, Data: book.Font})
@@ -159,7 +172,18 @@ func Write(book Book) ([]byte, error) {
 	return WriteZip(files, book.Modified)
 }
 
-func prepare(chapters []Chapter) ([]doc, []tocNode, error) {
+func countDescendants(chs []Chapter) int {
+	total := 0
+	for _, c := range chs {
+		if len(c.Paragraphs) > 0 || len(c.Children) == 0 {
+			total++
+		}
+		total += countDescendants(c.Children)
+	}
+	return total
+}
+
+func prepare(chapters []Chapter, volumeStyle string) ([]doc, []tocNode, error) {
 	var docs []doc
 	n := 0
 	var walk func([]Chapter) []tocNode
@@ -170,10 +194,30 @@ func prepare(chapters []Chapter) ([]doc, []tocNode, error) {
 			if title == "" {
 				title = "未命名"
 			}
+			emptyParent := len(c.Paragraphs) == 0 && len(c.Children) > 0
+			if emptyParent && volumeStyle == "skip" {
+				children := walk(c.Children)
+				href := ""
+				if len(children) > 0 {
+					href = children[0].href
+				}
+				if href != "" {
+					nodes = append(nodes, tocNode{title: title, href: href, children: children})
+					continue
+				}
+			}
 			n++
 			id := fmt.Sprintf("ch%d", n)
 			href := fmt.Sprintf("chapter_%03d.xhtml", n)
-			docs = append(docs, doc{id: id, href: href, title: title, paragraphs: c.Paragraphs})
+			d := doc{
+				id:         id,
+				href:       href,
+				title:      title,
+				paragraphs: c.Paragraphs,
+				divider:    emptyParent && volumeStyle == "divider",
+				childCount: countDescendants(c.Children),
+			}
+			docs = append(docs, d)
 			children := walk(c.Children)
 			nodes = append(nodes, tocNode{title: title, href: href, children: children})
 		}
@@ -216,12 +260,18 @@ func contentOPF(book Book, uid, modified string, docs []doc, textCover bool) str
 	b.WriteString(`  </manifest>` + "\n")
 	b.WriteString(`  <spine toc="ncx">` + "\n")
 	b.WriteString(`    <itemref idref="cover"/>` + "\n")
+	if book.InlineTOC {
+		b.WriteString(`    <itemref idref="nav"/>` + "\n")
+	}
 	for _, d := range docs {
 		fmt.Fprintf(&b, `    <itemref idref="%s"/>`+"\n", d.id)
 	}
 	b.WriteString(`  </spine>` + "\n")
 	b.WriteString(`  <guide>` + "\n")
 	b.WriteString(`    <reference type="cover" title="封面" href="cover.xhtml"/>` + "\n")
+	if book.InlineTOC {
+		b.WriteString(`    <reference type="toc" title="目录" href="nav.xhtml"/>` + "\n")
+	}
 	b.WriteString(`    <reference type="text" title="正文" href="` + xmlEscape(docs[0].href) + `"/>` + "\n")
 	b.WriteString(`  </guide>` + "\n")
 	b.WriteString(`</package>` + "\n")
@@ -348,6 +398,13 @@ func stylesheet(style Style) string {
 	b.WriteString(`.cover-author{font-size:1.05em;margin-top:1.4em;}`)
 	b.WriteString(`.cover-img{margin:0;text-indent:0;}`)
 	b.WriteString(`.cover-img img{max-width:100%;}`)
+	b.WriteString(`.vol-divider{margin:24% 8% 0;padding:1.8em 0;border-top:0.08em solid #8c7b6b;border-bottom:0.08em solid #8c7b6b;text-align:center;}`)
+	b.WriteString(`.vol-divider h1{margin:0;font-size:1.7em;line-height:1.45;text-align:center;}`)
+	b.WriteString(`.vol-count{margin:1em 0 0;text-indent:0;text-align:center;font-size:0.85em;letter-spacing:0.15em;color:#666;}`)
+	b.WriteString(`nav#toc ol{list-style:none;padding-left:1.3em;margin:0.35em 0;}`)
+	b.WriteString(`nav#toc>ol{padding-left:0;}`)
+	b.WriteString(`nav#toc li{margin:0.35em 0;line-height:1.6;}`)
+	b.WriteString(`nav#toc a{text-decoration:none;color:inherit;}`)
 	return b.String()
 }
 
@@ -365,6 +422,33 @@ func coverXHTML(book Book, textCover bool) string {
 	}
 	body.WriteString(`</body>`)
 	return xhtmlShell(book.Title, body.String())
+}
+
+func volumeDividerXHTML(title string, childCount int, style Style) string {
+	var body strings.Builder
+	body.WriteString(`<div class="vol-divider">`)
+	fmt.Fprintf(&body, "<h1>%s</h1>", xmlEscape(title))
+	if childCount > 0 {
+		fmt.Fprintf(&body, `<p class="vol-count">共 %d 章</p>`, childCount)
+	}
+	body.WriteString(`</div>`)
+	extraCSS := "\n.vol-divider{margin:24% 8% 0;padding:1.8em 0;border-top:0.08em solid #8c7b6b;border-bottom:0.08em solid #8c7b6b;text-align:center;}\n" +
+		".vol-divider h1{margin:0;font-size:1.7em;line-height:1.45;text-align:center;}\n" +
+		".vol-count{margin:1em 0 0;text-indent:0;text-align:center;font-size:0.85em;letter-spacing:0.15em;color:#666;}"
+	return `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<!DOCTYPE html>` + "\n" +
+		`<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh">` + "\n" +
+		`<head>` + "\n" +
+		`<title>` + xmlEscape(title) + `</title>` + "\n" +
+		`<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>` + "\n" +
+		`<style type="text/css">` + "\n" +
+		moonRules(style) + extraCSS + "\n" +
+		`</style>` + "\n" +
+		`</head>` + "\n" +
+		`<body>` + "\n" +
+		body.String() + "\n" +
+		`</body>` + "\n" +
+		`</html>` + "\n"
 }
 
 func chapterXHTML(title string, paragraphs []string, style Style) string {
@@ -418,14 +502,16 @@ func xhtmlShell(title, body string) string {
 		body + `</html>` + "\n"
 }
 
-func navXHTML(title string, toc []tocNode) string {
+func navXHTML(title string, toc []tocNode, includeCover bool) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<!DOCTYPE html>` + "\n")
 	b.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh" lang="zh">`)
 	b.WriteString(`<head><meta charset="UTF-8"/><title>目录</title><link rel="stylesheet" type="text/css" href="style.css"/></head>`)
 	b.WriteString(`<body><nav epub:type="toc" id="toc"><h1>目录</h1><ol>`)
-	b.WriteString(`<li><a href="cover.xhtml">封面</a></li>`)
+	if includeCover {
+		b.WriteString(`<li><a href="cover.xhtml">封面</a></li>`)
+	}
 	writeNavList(&b, toc)
 	b.WriteString(`</ol></nav></body></html>` + "\n")
 	_ = title
@@ -444,10 +530,13 @@ func writeNavList(b *strings.Builder, nodes []tocNode) {
 	}
 }
 
-func ncxXML(title, author, uid string, toc []tocNode) string {
+func ncxXML(title, author, uid string, toc []tocNode, includeCover bool) string {
 	depth := 1
 	var measure func([]tocNode, int)
 	measure = func(nodes []tocNode, d int) {
+		if len(nodes) == 0 {
+			return
+		}
 		if d > depth {
 			depth = d
 		}
@@ -469,7 +558,11 @@ func ncxXML(title, author, uid string, toc []tocNode) string {
 	fmt.Fprintf(&b, `  <docAuthor><text>%s</text></docAuthor>`+"\n", xmlEscape(author))
 	b.WriteString(`  <navMap>` + "\n")
 	play := 0
-	writeNavPoints(&b, append([]tocNode{{title: "封面", href: "cover.xhtml"}}, toc...), &play, "    ")
+	roots := toc
+	if includeCover {
+		roots = append([]tocNode{{title: "封面", href: "cover.xhtml"}}, toc...)
+	}
+	writeNavPoints(&b, roots, &play, "    ")
 	b.WriteString(`  </navMap>` + "\n")
 	b.WriteString(`</ncx>` + "\n")
 	return b.String()

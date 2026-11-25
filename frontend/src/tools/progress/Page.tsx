@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { callTool } from "@/lib/api"
 import { errorMessage, isDesktop } from "@/lib/utils"
-import { FolderOpen, RotateCcw, Search, Trash2 } from "lucide-react"
+import { ArrowRight, FolderOpen, RotateCcw, Search, Trash2 } from "lucide-react"
 
 export type ProgressJob = {
   id: string
@@ -14,6 +14,7 @@ export type ProgressJob = {
   progress: number
   error?: string
   outputPath?: string
+  outputFormat?: string
   format: string
   elapsed: string
   eta?: string
@@ -55,64 +56,71 @@ export function ProgressPage() {
   }, [])
 
   const shown = useMemo(() => {
-    const q = query.trim()
+    const q = query.trim().toLowerCase()
     return jobs.filter((job) => {
       if (filter === "running" && !running(job.status)) return false
       if (filter !== "all" && filter !== "running" && job.status !== filter) return false
       if (!q) return true
-      return `${job.title} ${job.name}`.includes(q)
+      return `${job.title} ${job.name}`.toLowerCase().includes(q)
     })
   }, [jobs, query, filter])
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 p-3 md:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
+    <div className="mx-auto max-w-3xl space-y-4 p-4 md:p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
         <div>
-          <p className="text-[11px] tracking-[0.22em] text-cinnabar">进度</p>
-          <h1 className="font-serif text-3xl tracking-wide">排版队列</h1>
-          <p className="mt-1 text-sm text-muted">转换在后台进行，可以回到书架继续改其他书。</p>
+          <h1 className="text-xl font-semibold tracking-tight text-ink">转换进度</h1>
+          <p className="mt-1 text-xs text-muted">任务在后台依次执行，你可以随时切回工作区继续整理其他书。</p>
         </div>
         <Button
           type="button"
+          size="sm"
           variant="outline"
           onClick={() => void callTool("txt2epub", "clearJobs", {}).then(() => reload())}
         >
-          <Trash2 className="h-4 w-4" />
-          清空历史
+          <Trash2 className="h-3.5 w-3.5" />
+          清空已完成
         </Button>
       </header>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[12rem] flex-1">
-          <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted" />
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted" />
           <Input aria-label="搜索进度" className="pl-8" placeholder="按书名筛选" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
-        {filters.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setFilter(item.id)}
-            className={`rounded-full border px-3 py-1 text-xs transition ${filter === item.id ? "border-cinnabar bg-cinnabar text-paper-card" : "border-line bg-paper-card text-muted"}`}
-          >
-            {item.label}
-          </button>
-        ))}
+        <div className="flex rounded-lg border border-line bg-paper-deep/60 p-0.5">
+          {filters.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFilter(item.id)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                filter === item.id ? "bg-white text-ink shadow-sm" : "text-muted hover:text-ink"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
-      {error ? <p className="text-sm text-cinnabar">{error}</p> : null}
+      {error ? <p className="rounded-lg border border-red-200 bg-danger-soft px-3 py-2 text-xs text-danger">{error}</p> : null}
       {shown.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-line bg-paper-card/80 px-6 py-10 text-center shadow-card">
-          <div className="mx-auto mb-3 grid h-16 w-12 place-items-center rounded-sm border border-cinnabar/40 bg-paper font-serif text-cinnabar">册</div>
-          <p className="font-serif text-lg">还没有排版记录</p>
-          <p className="mt-1 text-sm text-muted">从书架开始转换后，进度会留在这里。</p>
+        <div className="rounded-xl border border-dashed border-line bg-paper-card px-6 py-12 text-center shadow-card">
+          <p className="text-sm font-medium text-ink">还没有转换记录</p>
+          <p className="mt-1 text-xs text-muted">从「电子书重排」开始转换后，实时进度和导出路径会显示在这里。</p>
         </div>
       ) : (
-        <ul className="space-y-3">
+        <ul className="space-y-2.5">
           {shown.map((job) => (
-            <li key={job.id} className="rounded-xl border border-line bg-paper-card p-4 shadow-card transition hover:-translate-y-0.5">
+            <li key={job.id} className="rounded-xl border border-line bg-paper-card p-4 shadow-card">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-sm border border-cinnabar/30 px-1.5 py-0.5 text-[10px] tracking-wide text-cinnabar">{job.format || "TXT"}</span>
-                    <h2 className="truncate font-serif text-lg">{job.title || job.name}</h2>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-md border border-line bg-paper px-1.5 py-0.5 font-mono text-[10px] font-medium text-ink">
+                      {job.format || "TXT"}
+                      <ArrowRight className="h-2.5 w-2.5 text-muted" />
+                      {job.outputFormat || "EPUB"}
+                    </span>
+                    <h2 className="truncate text-sm font-semibold text-ink">{job.title || job.name}</h2>
                   </div>
                   <p className="mt-1 text-xs text-muted">
                     {job.step}
@@ -120,12 +128,15 @@ export function ProgressPage() {
                     {job.eta ? ` · 剩余 ${job.eta}` : ""}
                   </p>
                 </div>
-                <span className="text-xs text-muted">{Math.round((job.progress || 0) * 100)}%</span>
+                <span className="font-mono text-xs font-medium text-muted">{Math.round((job.progress || 0) * 100)}%</span>
               </div>
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line">
-                <div className="h-full bg-cinnabar transition-all" style={{ width: `${Math.round((job.progress || 0) * 100)}%` }} />
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-paper-deep">
+                <div
+                  className={`h-full transition-all ${job.status === "failed" ? "bg-danger" : "bg-ink"}`}
+                  style={{ width: `${Math.round((job.progress || 0) * 100)}%` }}
+                />
               </div>
-              {job.error ? <p className="mt-2 text-sm text-cinnabar">{job.error}</p> : null}
+              {job.error ? <p className="mt-2 text-xs text-danger">{job.error}</p> : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 {running(job.status) || job.status === "queued" ? (
                   <Button type="button" size="sm" variant="outline" onClick={() => void callTool("txt2epub", "cancelJob", { id: job.id }).then(() => reload())}>

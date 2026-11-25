@@ -171,15 +171,15 @@ export function ScrapeDialog({
   const sourceName = sources.find((item) => item.id === source)?.name || source
 
   return (
-    <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/40 p-3 sm:items-center" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-30 flex items-end justify-center bg-black/40 p-3 backdrop-blur-[1px] sm:items-center" onMouseDown={onClose}>
       <div
-        className="flex max-h-[86vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-line bg-paper shadow-card"
+        className="flex max-h-[86vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-line bg-white shadow-xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-baseline justify-between gap-3 border-b border-line px-4 py-3">
+        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
           <div>
-            <h2 className="font-serif text-2xl">刮搜</h2>
-            <p className="text-[11px] text-muted">选择数据来源</p>
+            <h2 className="text-base font-semibold text-ink">刮搜元数据</h2>
+            <p className="text-[11px] text-muted">选择书源并勾选需要应用的字段</p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={onClose}>
             关闭
@@ -187,13 +187,13 @@ export function ScrapeDialog({
         </div>
         <div className="space-y-3 overflow-auto px-4 py-3">
           <label className="block space-y-1">
-            <span className="text-xs text-muted">书名</span>
+            <span className="text-xs font-medium text-muted">书名 / 作者</span>
             <Input aria-label="刮搜关键词" value={query} onChange={(e) => setQuery(e.target.value)} />
           </label>
           <div className="flex flex-wrap gap-2">
             <select
               aria-label="数据来源"
-              className="h-9 min-w-0 flex-1 rounded-md border border-line bg-[#fffaf3] px-3 text-sm"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-line bg-white px-3 text-sm text-ink"
               value={source}
               onChange={(e) => setSource(e.target.value)}
             >
@@ -204,22 +204,24 @@ export function ScrapeDialog({
               ))}
             </select>
             <Button type="button" disabled={busy} onClick={() => void search()}>
-              {busy ? "搜索中..." : "刮搜"}
+              {busy ? "搜索中…" : "开始刮搜"}
             </Button>
           </div>
-          {error ? <p className="text-sm text-cinnabar">{error}</p> : null}
-          {note ? <p className="text-sm text-muted">{note}</p> : null}
+          {error ? <p className="rounded-lg border border-red-200 bg-danger-soft px-3 py-2 text-xs text-danger">{error}</p> : null}
+          {note ? <p className="text-xs text-muted">{note}</p> : null}
           {picked ? (
-            <div className="space-y-2 rounded-lg border border-line bg-paper-card p-3">
-              <h3 className="text-sm">确认修改</h3>
-              <Button type="button" size="sm" onClick={() => void apply()}>
-                应用所选修改
-              </Button>
+            <div className="space-y-2 rounded-lg border border-line bg-paper p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold text-ink">确认应用修改</h3>
+                <Button type="button" size="sm" onClick={() => void apply()}>
+                  应用所选修改
+                </Button>
+              </div>
               {changes.map((item) => (
-                <label key={item.key} className="flex items-start gap-2 text-sm">
+                <label key={item.key} className="flex items-start gap-2 text-xs">
                   <input
                     type="checkbox"
-                    className="mt-1"
+                    className="mt-0.5"
                     checked={!off[item.key]}
                     onChange={() => setOff((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
                   />
@@ -241,16 +243,16 @@ export function ScrapeDialog({
                   <li key={`${row.title}-${index}`}>
                     <button
                       type="button"
-                      className="flex w-full gap-3 rounded-lg border border-line bg-[#fffaf3] p-2 text-left hover:border-cinnabar"
+                      className="flex w-full gap-3 rounded-lg border border-line bg-white p-2.5 text-left hover:border-ink/40 hover:bg-paper/60"
                       onClick={() => choose(row)}
                     >
                       {thumbs[row.coverUrl] ? (
-                        <img src={thumbs[row.coverUrl]} alt="" className="h-16 w-12 shrink-0 rounded-sm object-cover" />
+                        <img src={thumbs[row.coverUrl]} alt="" className="h-16 w-12 shrink-0 rounded object-cover" />
                       ) : (
-                        <span className="flex h-16 w-12 shrink-0 items-center justify-center rounded-sm bg-paper text-[10px] text-muted">无封面</span>
+                        <span className="flex h-16 w-12 shrink-0 items-center justify-center rounded bg-paper text-[10px] text-muted">无封面</span>
                       )}
                       <span className="min-w-0">
-                        <span className="block truncate font-serif text-sm">{row.title || "未命名"}</span>
+                        <span className="block truncate text-sm font-medium text-ink">{row.title || "未命名"}</span>
                         <span className="block truncate text-xs text-muted">
                           {[row.author || "佚名", sourceName, row.rating && `评分 ${row.rating}`, row.year].filter(Boolean).join(" · ")}
                         </span>

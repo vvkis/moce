@@ -54,7 +54,7 @@ func main() {
 		Height:           820,
 		MinWidth:         920,
 		MinHeight:        640,
-		BackgroundColour: options.NewRGB(246, 240, 230),
+		BackgroundColour: options.NewRGB(247, 247, 248),
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

@@ -13,18 +13,19 @@ import (
 )
 
 type jobView struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Title      string  `json:"title"`
-	Status     string  `json:"status"`
-	Step       string  `json:"step"`
-	Progress   float64 `json:"progress"`
-	Error      string  `json:"error,omitempty"`
-	OutputPath string  `json:"outputPath,omitempty"`
-	Format     string  `json:"format"`
-	Elapsed    string  `json:"elapsed"`
-	ETA        string  `json:"eta,omitempty"`
-	Batch      string  `json:"batch"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Title        string  `json:"title"`
+	Status       string  `json:"status"`
+	Step         string  `json:"step"`
+	Progress     float64 `json:"progress"`
+	Error        string  `json:"error,omitempty"`
+	OutputPath   string  `json:"outputPath,omitempty"`
+	OutputFormat string  `json:"outputFormat,omitempty"`
+	Format       string  `json:"format"`
+	Elapsed      string  `json:"elapsed"`
+	ETA          string  `json:"eta,omitempty"`
+	Batch        string  `json:"batch"`
 }
 
 type storedJob struct {
@@ -99,16 +100,29 @@ func (t *Tool) jobs(action string, payload json.RawMessage) (any, error) {
 			if title == "" {
 				title = file.Name
 			}
-			item := &storedJob{
-				jobView: jobView{
-					ID: batchID(batch), Name: file.Name, Title: title, Status: "queued",
-					Step: "排队", Format: formatOf(file.Name), Batch: batch,
-				},
-				Input: file, Estimate: estimateSeconds(file),
+			want := resolveOutputFormat(file.OutputFormat, file.Options.OutputFormat)
+			targets := []string{want}
+			if want == "both" {
+				targets = []string{"epub", "azw3"}
 			}
-			item.ID = newID()
-			jobList = append(jobList, item)
-			ids = append(ids, item.ID)
+			for _, outFmt := range targets {
+				fcopy := file
+				fcopy.OutputFormat = outFmt
+				fcopy.Options.OutputFormat = outFmt
+				outLabel := "EPUB"
+				if outFmt == "azw3" {
+					outLabel = "AZW3"
+				}
+				item := &storedJob{
+					jobView: jobView{
+						ID: newID(), Name: fcopy.Name, Title: title, Status: "queued",
+						Step: "排队", Format: formatOf(fcopy.Name), OutputFormat: outLabel, Batch: batch,
+					},
+					Input: fcopy, Estimate: estimateSeconds(fcopy),
+				}
+				jobList = append(jobList, item)
+				ids = append(ids, item.ID)
+			}
 		}
 		jobMu.Unlock()
 		saveJobs()
@@ -118,8 +132,6 @@ func (t *Tool) jobs(action string, payload json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("未知操作：%s", action)
 	}
 }
-
-func batchID(batch string) string { return batch }
 
 func (t *Tool) pump() {
 	jobMu.Lock()
@@ -151,7 +163,7 @@ func (t *Tool) pump() {
 			setHook(func(step string, frac float64) {
 				jobMu.Lock()
 				job.Status = step
-				job.Step = stepLabel(step)
+				job.Step = stepLabelFor(step, job.OutputFormat)
 				job.Progress = frac
 				jobMu.Unlock()
 			})
@@ -324,13 +336,16 @@ func estimateSeconds(in fileIn) int {
 	return sec
 }
 
-func stepLabel(step string) string {
+func stepLabelFor(step, outFmt string) string {
 	switch step {
 	case "extracting":
 		return "提取正文"
 	case "detecting":
 		return "识别章节"
 	case "packaging":
+		if outFmt == "AZW3" {
+			return "打包 AZW3"
+		}
 		return "打包 EPUB"
 	default:
 		return step

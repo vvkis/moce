@@ -26,7 +26,16 @@ export type ProbeEntry = {
   level: number
   kind: string
   paragraphs: number
+  runes?: number
   snippet: string
+}
+
+export type TocEdit = {
+  index: number
+  title?: string
+  merge?: boolean
+  level?: number
+  delta?: number
 }
 
 export type ProbeResult = {
@@ -54,7 +63,9 @@ export type ProbeResult = {
 
 export type ConvertResult = {
   path?: string
+  extraPaths?: string[]
   filename: string
+  format?: string
   bytes: number
   dataBase64?: string
   chapterCount: number
