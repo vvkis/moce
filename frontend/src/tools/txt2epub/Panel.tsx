@@ -97,7 +97,7 @@ const detectKeys = [
   "fallbackRunes",
 ]
 
-const quickOptionKeys = new Set(["volumePageStyle", "inlineToc", "hideCoverInToc"])
+const quickOptionKeys = new Set(["volumePageStyle", "inlineToc", "includeCoverInToc"])
 
 export function Txt2EpubPanel({ meta }: { meta: ToolMeta }) {
   const shell = useContext(ShellContext)
@@ -114,12 +114,6 @@ export function Txt2EpubPanel({ meta }: { meta: ToolMeta }) {
         label: "默认中文小说",
         chapterPattern: defaultChapterPat,
         volumePattern: defaultVolumePat,
-      },
-      {
-        id: "vol-short",
-        label: "卷一 / 上下卷",
-        chapterPattern: defaultChapterPat,
-        volumePattern: `(?:第\\s*[0-9０-９零〇一二三四五六七八九十百千万两]+\\s*[卷部]|卷[一二三四五六七八九十百0-9上中下]+|[上中下]卷).*`,
       },
       {
         id: "numeric",

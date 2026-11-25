@@ -50,7 +50,7 @@ type Options struct {
 	VolumePattern    string  `json:"volumePattern"`
 	VolumePageStyle  string  `json:"volumePageStyle"`
 	InlineTOC        bool    `json:"inlineToc"`
-	HideCoverInTOC   bool    `json:"hideCoverInToc"`
+	IncludeCoverInTOC bool   `json:"includeCoverInToc"`
 	MergeBrokenLines bool    `json:"mergeBrokenLines"`
 	DropEmptyLines   bool    `json:"dropEmptyLines"`
 	BaseFontSize     int     `json:"baseFontSize"`
@@ -158,8 +158,8 @@ func (t *Tool) Meta() toolhost.Meta {
 			},
 			{Key: "chapterPattern", Label: "章节正则", Type: "textarea", Default: chapters.DefaultChapterPattern, Help: "匹配一行的开头，使用 RE2 语法。默认识别「第1章」「第一章」「序章」「楔子」「番外」「尾声」「后记」。"},
 			{Key: "volumePattern", Label: "分卷正则", Type: "textarea", Default: chapters.DefaultVolumePattern, Help: "识别「第一卷」「第一部」。同一本书里还有章节时，会做成二级目录。"},
-			{Key: "inlineToc", Label: "生成书内目录页", Type: "bool", Default: false, Help: "在封面之后插入可点击的书内目录页（不影响系统目录树）。"},
-			{Key: "hideCoverInToc", Label: "目录中隐藏「封面」项", Type: "bool", Default: false, Help: "阅读器目录树不再在最前面添加「封面」条目。"},
+			{Key: "inlineToc", Label: "生成书内目录页", Type: "bool", Default: true, Help: "在封面之后插入可点击的书内目录页（不影响系统目录树）。"},
+			{Key: "includeCoverInToc", Label: "目录中包含「封面」项", Type: "bool", Default: false, Help: "勾选后会在阅读器目录树最前面加上「封面」入口；默认不显示，封面页与书架封图不受影响。"},
 			{Key: "mergeBrokenLines", Label: "合并断行", Type: "bool", Default: true, Help: "把被折断的句子接回同一段。行首缩进或空行表示新的一段。"},
 			{Key: "dropEmptyLines", Label: "去掉空行", Type: "bool", Default: true, Help: "空行不写进正文。"},
 			{Key: "baseFontSize", Label: "正文字号（点）", Type: "number", Default: 0, Min: num(0), Max: num(36), Step: num(1), Help: "0 表示跟随阅读器。填了则按 12 点为基准写成 em，不用 px，阅读器仍可调字号。"},
@@ -492,7 +492,7 @@ func (t *Tool) convert(in fileIn) (ConvertResult, error) {
 		FontFormat:      fontFormat,
 		VolumePageStyle: opt.VolumePageStyle,
 		InlineTOC:       opt.InlineTOC,
-		HideCoverInTOC:  opt.HideCoverInTOC,
+		HideCoverInTOC:  !opt.IncludeCoverInTOC,
 	}
 
 	targetFmt := resolveOutputFormat(in.OutputFormat, opt.OutputFormat)

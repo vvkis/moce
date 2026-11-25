@@ -287,7 +287,7 @@ func TestConvertAZW3AndBothAndTOCEdits(t *testing.T) {
 	opt.OutputFormat = "both"
 	opt.VolumePageStyle = "divider"
 	opt.InlineTOC = true
-	opt.HideCoverInTOC = true
+	// Default IncludeCoverInTOC is false, so "封面" is omitted from TOC unless opted in.
 
 	tool := New()
 	resAny, err := tool.Call("convert", mustJSON(fileIn{
@@ -335,6 +335,21 @@ func TestConvertAZW3AndBothAndTOCEdits(t *testing.T) {
 	}
 	if !strings.Contains(reopened.Text, "卷一·上游") || !strings.Contains(reopened.Text, "误判行。") {
 		t.Fatalf("AZW3 body mismatch:\n%s", reopened.Text)
+	}
+
+	// When IncludeCoverInTOC is opted in, "封面" appears in nav.xhtml.
+	optWithCover := fullOptions()
+	optWithCover.IncludeCoverInTOC = true
+	withCoverAny, err := tool.Call("convert", mustJSON(fileIn{
+		Name: "河灯.txt", Path: src, Title: "河灯", Author: "沈小满",
+		ReturnBytes: true, Options: optWithCover,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawWithCover, _ := base64.StdEncoding.DecodeString(withCoverAny.(ConvertResult).DataBase64)
+	if !strings.Contains(string(unzip(t, rawWithCover)["OEBPS/nav.xhtml"]), "cover.xhtml") {
+		t.Fatal("expected cover entry in nav when IncludeCoverInTOC is true")
 	}
 }
 
