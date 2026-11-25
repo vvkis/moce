@@ -33,14 +33,14 @@ type Source struct {
 	Name string `json:"name"`
 }
 
-// Sources is the picker order from moon Search.SOURCES.
+// Sources is the picker order for metadata scraping (Qidian first by default).
 func Sources() []Source {
 	return []Source{
+		{ID: "qidian", Name: "起点中文网"},
 		{ID: "douban", Name: "豆瓣"},
 		{ID: "weread", Name: "微信读书"},
 		{ID: "qimao", Name: "七猫小说"},
 		{ID: "jjwxc", Name: "晋江文学城"},
-		{ID: "qidian", Name: "起点中文网"},
 		{ID: "fanqie", Name: "番茄小说"},
 		{ID: "changpei", Name: "长佩文学"},
 		{ID: "xiaoxiang", Name: "潇湘书院"},

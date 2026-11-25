@@ -22,11 +22,11 @@ export type ScrapeRow = {
 type Source = { id: string; name: string }
 
 const fallbackSources: Source[] = [
+  { id: "qidian", name: "起点中文网" },
   { id: "douban", name: "豆瓣" },
   { id: "weread", name: "微信读书" },
   { id: "qimao", name: "七猫小说" },
   { id: "jjwxc", name: "晋江文学城" },
-  { id: "qidian", name: "起点中文网" },
   { id: "fanqie", name: "番茄小说" },
   { id: "changpei", name: "长佩文学" },
   { id: "xiaoxiang", name: "潇湘书院" },
@@ -59,7 +59,7 @@ export function ScrapeDialog({
 }) {
   const [sources, setSources] = useState<Source[]>(fallbackSources)
   const [query, setQuery] = useState(() => [title, author].map((s) => s.trim()).filter(Boolean).join(" "))
-  const [source, setSource] = useState("douban")
+  const [source, setSource] = useState("qidian")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [results, setResults] = useState<ScrapeRow[]>([])
