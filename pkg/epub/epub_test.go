@@ -216,8 +216,8 @@ func TestEmbeddedFontAndPNGCover(t *testing.T) {
 	if regexp.MustCompile(`font-size:\s*\d+px`).MatchString(css) || strings.Contains(css, "!important") {
 		t.Fatalf("embedded font must not lock size:\n%s", css)
 	}
-	if !strings.Contains(css, "line-height:1.8") || !strings.Contains(css, "margin:5%") {
-		t.Fatalf("missing moon defaults:\n%s", css)
+	if !strings.Contains(css, "margin:1em 0") || strings.Contains(css, "body{margin:") || strings.Contains(css, "body{line-height:") {
+		t.Fatalf("unexpected default css:\n%s", css)
 	}
 	opf := string(files["OEBPS/content.opf"])
 	if !strings.Contains(opf, `media-type="font/ttf"`) || !strings.Contains(opf, `image/png`) {
@@ -274,9 +274,9 @@ func TestExplicitStyleOverrides(t *testing.T) {
 func assertReaderControlledCSS(t *testing.T, css string) {
 	t.Helper()
 	for _, needle := range []string{
-		"body{margin:5%;line-height:1.8;text-align:justify;}",
+		"body{text-align:justify;}",
 		"h1{font-size:1.5em;text-align:center;margin:2em 0 1.5em;page-break-after:avoid;}",
-		"p{text-indent:2em;margin:0.45em 0;orphans:2;widows:2;}",
+		"p{text-indent:2em;margin:1em 0;orphans:2;widows:2;}",
 	} {
 		if !strings.Contains(css, needle) {
 			t.Fatalf("missing %s\n%s", needle, css)

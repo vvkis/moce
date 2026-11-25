@@ -39,10 +39,17 @@ type Style struct {
 	FontFormat    string // truetype or opentype
 }
 
-// MoonDefaultStyle is the moon plugin stylesheet: 5% margin, 1.8 line height,
-// 2em indent, and 0.45em paragraph spacing. No font family and no px font size.
+// DefaultStyle aligns with Calibre's default Kindle typography:
+// omit body line-height and margin so Kindle's native line-spacing and margin
+// controls stay active (tight intra-paragraph spacing), while using 1em
+// paragraph spacing for clear visual separation between paragraphs.
+func DefaultStyle() Style {
+	return Style{LineHeight: 0, MarginPercent: 0, ParagraphEm: 1, IndentEm: 2}
+}
+
+// MoonDefaultStyle is kept as an alias to DefaultStyle for callers.
 func MoonDefaultStyle() Style {
-	return Style{LineHeight: 1.8, MarginPercent: 5, ParagraphEm: 0.45, IndentEm: 2}
+	return DefaultStyle()
 }
 
 // Book is the document to pack.

@@ -75,9 +75,9 @@ func TestHedengTextAndReflow(t *testing.T) {
 			t.Fatalf("%s fanwai not parent\n%s", name, nav)
 		}
 		for _, needle := range []string{
-			"body{margin:5%;line-height:1.8;text-align:justify;}",
+			"body{text-align:justify;}",
 			"h1{font-size:1.5em;text-align:center;margin:2em 0 1.5em;page-break-after:avoid;}",
-			"p{text-indent:2em;margin:0.45em 0;orphans:2;widows:2;}",
+			"p{text-indent:2em;margin:1em 0;orphans:2;widows:2;}",
 		} {
 			if !strings.Contains(css, needle) {
 				t.Fatalf("%s css %s\n%s", name, needle, css)
